@@ -1,43 +1,47 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package view
 
 import (
+	"fmt"
 	"sync/atomic"
 
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/tview"
 )
 
-const (
-	autoscroll = "Autoscroll"
-	fullscreen = "FullScreen"
-	timestamp  = "Timestamps"
-	wrap       = "Wrap"
-	on         = "On"
-	off        = "Off"
-	spacer     = "     "
-	bold       = "[::b]"
-)
+const spacer = "     "
 
 // LogIndicator represents a log view indicator.
 type LogIndicator struct {
 	*tview.TextView
 
-	styles       *config.Styles
-	scrollStatus int32
-	fullScreen   bool
-	textWrap     bool
-	showTime     bool
+	styles                     *config.Styles
+	scrollStatus               int32
+	indicator                  []byte
+	fullScreen                 bool
+	textWrap                   bool
+	showTime                   bool
+	allContainers              bool
+	shouldDisplayAllContainers bool
 }
 
 // NewLogIndicator returns a new indicator.
-func NewLogIndicator(cfg *config.Config, styles *config.Styles) *LogIndicator {
+func NewLogIndicator(cfg *config.Config, styles *config.Styles, allContainers bool) *LogIndicator {
 	l := LogIndicator{
-		styles:       styles,
-		TextView:     tview.NewTextView(),
-		scrollStatus: 1,
-		fullScreen:   cfg.K9s.Logger.FullScreenLogs,
-		textWrap:     cfg.K9s.Logger.TextWrap,
-		showTime:     cfg.K9s.Logger.ShowTime,
+		styles:                     styles,
+		TextView:                   tview.NewTextView(),
+		indicator:                  make([]byte, 0, 100),
+		scrollStatus:               1,
+		fullScreen:                 cfg.K9s.UI.DefaultsToFullScreen,
+		textWrap:                   cfg.K9s.Logger.TextWrap,
+		showTime:                   cfg.K9s.Logger.ShowTime,
+		shouldDisplayAllContainers: allContainers,
+	}
+
+	if cfg.K9s.Logger.DisableAutoscroll {
+		l.scrollStatus = 0
 	}
 	l.StylesChanged(styles)
 	styles.AddListener(&l)
@@ -51,6 +55,7 @@ func NewLogIndicator(cfg *config.Config, styles *config.Styles) *LogIndicator {
 func (l *LogIndicator) StylesChanged(styles *config.Styles) {
 	l.SetBackgroundColor(styles.K9s.Views.Log.Indicator.BgColor.Color())
 	l.SetTextColor(styles.K9s.Views.Log.Indicator.FgColor.Color())
+	l.Refresh()
 }
 
 // AutoScroll reports the current scrolling status.
@@ -100,21 +105,58 @@ func (l *LogIndicator) ToggleAutoScroll() {
 	l.Refresh()
 }
 
-// Refresh updates the view.
-func (l *LogIndicator) Refresh() {
-	l.Clear()
-	l.update(autoscroll, l.AutoScroll(), spacer)
-	l.update(fullscreen, l.fullScreen, spacer)
-	l.update(timestamp, l.showTime, spacer)
-	l.update(wrap, l.textWrap, "")
+// ToggleAllContainers toggles the all-containers mode.
+func (l *LogIndicator) ToggleAllContainers() {
+	l.allContainers = !l.allContainers
+	l.Refresh()
 }
 
-func (l *LogIndicator) update(title string, state bool, padding string) {
-	bb := []byte(bold + title + ":")
-	if state {
-		bb = append(bb, []byte(on)...)
-	} else {
-		bb = append(bb, []byte(off)...)
+func (l *LogIndicator) reset() {
+	l.Clear()
+	l.indicator = l.indicator[:0]
+}
+
+// Refresh updates the view.
+func (l *LogIndicator) Refresh() {
+	l.reset()
+
+	var (
+		toggleFmt    = "[::b]%s:["
+		toggleOnFmt  = toggleFmt + string(l.styles.K9s.Views.Log.Indicator.ToggleOnColor) + "::b]On[-::] %s"
+		toggleOffFmt = toggleFmt + string(l.styles.K9s.Views.Log.Indicator.ToggleOffColor) + "::d]Off[-::]%s"
+	)
+
+	if l.shouldDisplayAllContainers {
+		if l.allContainers {
+			l.indicator = append(l.indicator, fmt.Sprintf(toggleOnFmt, "AllContainers", spacer)...)
+		} else {
+			l.indicator = append(l.indicator, fmt.Sprintf(toggleOffFmt, "AllContainers", spacer)...)
+		}
 	}
-	_, _ = l.Write(append(bb, []byte(padding)...))
+
+	if l.AutoScroll() {
+		l.indicator = append(l.indicator, fmt.Sprintf(toggleOnFmt, "Autoscroll", spacer)...)
+	} else {
+		l.indicator = append(l.indicator, fmt.Sprintf(toggleOffFmt, "Autoscroll", spacer)...)
+	}
+
+	if l.FullScreen() {
+		l.indicator = append(l.indicator, fmt.Sprintf(toggleOnFmt, "FullScreen", spacer)...)
+	} else {
+		l.indicator = append(l.indicator, fmt.Sprintf(toggleOffFmt, "FullScreen", spacer)...)
+	}
+
+	if l.Timestamp() {
+		l.indicator = append(l.indicator, fmt.Sprintf(toggleOnFmt, "Timestamps", spacer)...)
+	} else {
+		l.indicator = append(l.indicator, fmt.Sprintf(toggleOffFmt, "Timestamps", spacer)...)
+	}
+
+	if l.TextWrap() {
+		l.indicator = append(l.indicator, fmt.Sprintf(toggleOnFmt, "Wrap", "")...)
+	} else {
+		l.indicator = append(l.indicator, fmt.Sprintf(toggleOffFmt, "Wrap", "")...)
+	}
+
+	_, _ = l.Write(l.indicator)
 }

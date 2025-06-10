@@ -1,10 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package view
 
 import (
+	"errors"
+
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/dao"
-	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
+	"github.com/derailed/tcell/v2"
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -16,45 +22,78 @@ type Deploy struct {
 }
 
 // NewDeploy returns a new deployment view.
-func NewDeploy(gvr client.GVR) ResourceViewer {
-	d := Deploy{
-		ResourceViewer: NewPortForwardExtender(
+func NewDeploy(gvr *client.GVR) ResourceViewer {
+	var d Deploy
+	d.ResourceViewer = NewPortForwardExtender(
+		NewVulnerabilityExtender(
 			NewRestartExtender(
 				NewScaleExtender(
 					NewImageExtender(
-						NewLogsExtender(
-							NewBrowser(gvr),
-							nil,
+						NewOwnerExtender(
+							NewLogsExtender(NewBrowser(gvr), d.logOptions),
 						),
 					),
 				),
 			),
 		),
-	}
+	)
 	d.AddBindKeysFn(d.bindKeys)
 	d.GetTable().SetEnterFn(d.showPods)
-	d.GetTable().SetColorerFn(render.Deployment{}.ColorerFunc())
 
 	return &d
 }
 
-func (d *Deploy) bindKeys(aa ui.KeyActions) {
-	aa.Add(ui.KeyActions{
+func (d *Deploy) bindKeys(aa *ui.KeyActions) {
+	aa.Bulk(ui.KeyMap{
 		ui.KeyShiftR: ui.NewKeyAction("Sort Ready", d.GetTable().SortColCmd(readyCol, true), false),
 		ui.KeyShiftU: ui.NewKeyAction("Sort UpToDate", d.GetTable().SortColCmd(uptodateCol, true), false),
 		ui.KeyShiftL: ui.NewKeyAction("Sort Available", d.GetTable().SortColCmd(availCol, true), false),
+		ui.KeyZ:      ui.NewKeyAction("ReplicaSets", d.replicaSetsCmd, true),
 	})
 }
 
-func (d *Deploy) showPods(app *App, model ui.Tabular, gvr, path string) {
-	var ddp dao.Deployment
-	dp, err := ddp.Load(app.factory, path)
+func (d *Deploy) logOptions(prev bool) (*dao.LogOptions, error) {
+	path := d.GetTable().GetSelectedItem()
+	if path == "" {
+		return nil, errors.New("you must provide a selection")
+	}
+	dp, err := d.getInstance(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return podLogOptions(d.App(), path, prev, &dp.ObjectMeta, &dp.Spec.Template.Spec), nil
+}
+
+func (d *Deploy) replicaSetsCmd(evt *tcell.EventKey) *tcell.EventKey {
+	dName := d.GetTable().GetSelectedItem()
+	if dName == "" {
+		return evt
+	}
+	dp, err := d.getInstance(dName)
+	if err != nil {
+		d.App().Flash().Err(err)
+		return nil
+	}
+	showReplicasetsFromSelector(d.App(), dName, dp.Spec.Selector)
+	return nil
+}
+
+func (d *Deploy) showPods(app *App, _ ui.Tabular, _ *client.GVR, fqn string) {
+	dp, err := d.getInstance(fqn)
 	if err != nil {
 		app.Flash().Err(err)
 		return
 	}
 
-	showPodsFromSelector(app, path, dp.Spec.Selector)
+	showPodsFromSelector(app, fqn, dp.Spec.Selector)
+}
+
+func (d *Deploy) getInstance(fqn string) (*appsv1.Deployment, error) {
+	var dp dao.Deployment
+	dp.Init(d.App().factory, d.GVR())
+
+	return dp.GetInstance(fqn)
 }
 
 // ----------------------------------------------------------------------------
@@ -67,5 +106,15 @@ func showPodsFromSelector(app *App, path string, sel *metav1.LabelSelector) {
 		return
 	}
 
-	showPods(app, path, l.String(), "")
+	showPods(app, path, l, "")
+}
+
+func showReplicasetsFromSelector(app *App, path string, sel *metav1.LabelSelector) {
+	l, err := metav1.LabelSelectorAsSelector(sel)
+	if err != nil {
+		app.Flash().Err(err)
+		return
+	}
+
+	showReplicasets(app, path, l, "")
 }

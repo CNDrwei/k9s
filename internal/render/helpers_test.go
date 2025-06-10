@@ -1,76 +1,62 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package render
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/model1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
-func TestSortLabels(t *testing.T) {
-	uu := map[string]struct {
-		labels string
-		e      [][]string
-	}{
-		"simple": {
-			labels: "a=b,c=d",
-			e: [][]string{
-				{"a", "c"},
-				{"b", "d"},
+func TestTableGenericHydrate(t *testing.T) {
+	raw := load(t, "p1")
+	tt := metav1beta1.Table{
+		ColumnDefinitions: []metav1beta1.TableColumnDefinition{
+			{Name: "c1"},
+			{Name: "c2"},
+		},
+		Rows: []metav1beta1.TableRow{
+			{
+				Cells:  []any{"fred", 10},
+				Object: runtime.RawExtension{Object: raw},
+			},
+			{
+				Cells:  []any{"blee", 20},
+				Object: runtime.RawExtension{Object: raw},
 			},
 		},
 	}
+	rr := make([]model1.Row, 2)
+	var re Table
+	re.SetTable("blee", &tt)
 
-	for k := range uu {
-		u := uu[k]
-		t.Run(k, func(t *testing.T) {
-			hh, vv := sortLabels(labelize(u.labels))
-			assert.Equal(t, u.e[0], hh)
-			assert.Equal(t, u.e[1], vv)
-		})
-	}
+	require.NoError(t, model1.GenericHydrate("blee", &tt, rr, &re))
+	assert.Len(t, rr, 2)
+	assert.Len(t, rr[0].Fields, 2)
 }
 
-func TestLabelize(t *testing.T) {
-	uu := map[string]struct {
-		labels string
-		e      map[string]string
-	}{
-		"simple": {
-			labels: "a=b,c=d",
-			e:      map[string]string{"a": "b", "c": "d"},
-		},
+func TestTableHydrate(t *testing.T) {
+	oo := []runtime.Object{
+		&PodWithMetrics{Raw: load(t, "p1")},
 	}
+	rr := make([]model1.Row, 1)
 
-	for k := range uu {
-		u := uu[k]
-		t.Run(k, func(t *testing.T) {
-			assert.Equal(t, u.e, labelize(u.labels))
-		})
-	}
-}
-
-func TestDurationToNumber(t *testing.T) {
-	uu := map[string]struct {
-		s, e string
-	}{
-		"seconds":                 {s: "22s", e: "22"},
-		"minutes":                 {s: "22m", e: "1320"},
-		"hours":                   {s: "12h", e: "43200"},
-		"days":                    {s: "3d", e: "259200"},
-		"day_hour":                {s: "3d9h", e: "291600"},
-		"day_hour_minute":         {s: "2d22h3m", e: "252180"},
-		"day_hour_minute_seconds": {s: "2d22h3m50s", e: "252230"},
-	}
-
-	for k := range uu {
-		u := uu[k]
-		t.Run(k, func(t *testing.T) {
-			assert.Equal(t, u.e, durationToSeconds(u.s))
-		})
-	}
+	re := NewPod()
+	require.NoError(t, model1.Hydrate("blee", oo, rr, re))
+	assert.Len(t, rr, 1)
+	assert.Len(t, rr[0].Fields, 25)
 }
 
 func TestToAge(t *testing.T) {
@@ -78,36 +64,38 @@ func TestToAge(t *testing.T) {
 		t time.Time
 		e string
 	}{
-		"good": {
-			t: time.Now().Add(-10 * time.Second),
-			e: "10",
+		"zero": {
+			t: time.Time{},
+			e: UnknownValue,
 		},
 	}
 
 	for k := range uu {
 		uc := uu[k]
 		t.Run(k, func(t *testing.T) {
-			assert.Equal(t, uc.e, toAge(metav1.Time{Time: uc.t})[:2])
+			assert.Equal(t, uc.e, ToAge(metav1.Time{Time: uc.t}))
 		})
 	}
 }
 
-func TestToAgeHuma(t *testing.T) {
+func TestToAgeHuman(t *testing.T) {
 	uu := map[string]struct {
-		t time.Time
-		e string
+		t, e string
 	}{
+		"blank": {
+			t: "",
+			e: UnknownValue,
+		},
 		"good": {
-			t: time.Now().Add(-10 * time.Second),
-			e: "10",
+			t: time.Now().Add(-10 * time.Second).Format(time.RFC3339Nano),
+			e: "10s",
 		},
 	}
 
 	for k := range uu {
-		uc := uu[k]
+		u := uu[k]
 		t.Run(k, func(t *testing.T) {
-			ti := toAge(metav1.Time{Time: uc.t})
-			assert.Equal(t, uc.e, toAgeHuman(ti)[:2])
+			assert.Equal(t, u.e, toAgeHuman(u.t))
 		})
 	}
 }
@@ -204,18 +192,33 @@ func TestNa(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	uu := []struct {
-		s string
-		l int
-		e string
+	uu := map[string]struct {
+		data string
+		size int
+		e    string
 	}{
-		{"fred", 3, "fr…"},
-		{"fred", 2, "f…"},
-		{"fred", 10, "fred"},
+		"same": {
+			data: "fred",
+			size: 4,
+			e:    "fred",
+		},
+		"small": {
+			data: "fred",
+			size: 10,
+			e:    "fred",
+		},
+		"larger": {
+			data: "fred",
+			size: 3,
+			e:    "fr…",
+		},
 	}
 
-	for _, u := range uu {
-		assert.Equal(t, u.e, Truncate(u.s, u.l))
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			assert.Equal(t, u.e, Truncate(u.data, u.size))
+		})
 	}
 }
 
@@ -273,34 +276,6 @@ func TestBlank(t *testing.T) {
 	}
 }
 
-func TestIn(t *testing.T) {
-	uu := map[string]struct {
-		a []string
-		v string
-		e bool
-	}{
-		"in": {
-			a: []string{"fred", "blee"},
-			v: "blee",
-			e: true,
-		},
-		"empty": {
-			v: "blee",
-		},
-		"missing": {
-			a: []string{"fred", "blee"},
-			v: "duh",
-		},
-	}
-
-	for k := range uu {
-		uc := uu[k]
-		t.Run(k, func(t *testing.T) {
-			assert.Equal(t, uc.e, in(uc.a, uc.v))
-		})
-	}
-}
-
 func TestMetaFQN(t *testing.T) {
 	uu := map[string]struct {
 		m metav1.ObjectMeta
@@ -313,7 +288,7 @@ func TestMetaFQN(t *testing.T) {
 	for k := range uu {
 		uc := uu[k]
 		t.Run(k, func(t *testing.T) {
-			assert.Equal(t, uc.e, client.MetaFQN(uc.m))
+			assert.Equal(t, uc.e, client.MetaFQN(&uc.m))
 		})
 	}
 }
@@ -340,7 +315,7 @@ func TestMapToStr(t *testing.T) {
 		i map[string]string
 		e string
 	}{
-		{map[string]string{"blee": "duh", "aa": "bb"}, "aa=bb blee=duh"},
+		{map[string]string{"blee": "duh", "aa": "bb"}, "aa=bb,blee=duh"},
 		{map[string]string{}, ""},
 	}
 	for _, u := range uu {
@@ -353,11 +328,52 @@ func BenchmarkMapToStr(b *testing.B) {
 		"blee": "duh",
 		"aa":   "bb",
 	}
-	b.ResetTimer()
-	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
 		mapToStr(ll)
+	}
+}
+
+func TestRunesToNum(t *testing.T) {
+	uu := map[string]struct {
+		rr []rune
+		e  int64
+	}{
+		"0": {
+			rr: []rune(""),
+			e:  0,
+		},
+		"100": {
+			rr: []rune("100"),
+			e:  100,
+		},
+		"64": {
+			rr: []rune("64"),
+			e:  64,
+		},
+		"52640": {
+			rr: []rune("52640"),
+			e:  52640,
+		},
+	}
+
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			assert.Equal(t, u.e, runesToNum(u.rr))
+		})
+	}
+}
+
+func BenchmarkRunesToNum(b *testing.B) {
+	rr := []rune("5465")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		runesToNum(rr)
 	}
 }
 
@@ -409,7 +425,18 @@ func BenchmarkIntToStr(b *testing.B) {
 	v := 10
 	b.ResetTimer()
 	b.ReportAllocs()
-	for n := 0; n < b.N; n++ {
+	for range b.N {
 		IntToStr(v)
 	}
+}
+
+// Helpers...
+
+func load(t *testing.T, n string) *unstructured.Unstructured {
+	raw, err := os.ReadFile(fmt.Sprintf("testdata/%s.json", n))
+	require.NoError(t, err)
+	var o unstructured.Unstructured
+	err = json.Unmarshal(raw, &o)
+	require.NoError(t, err)
+	return &o
 }

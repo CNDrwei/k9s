@@ -1,12 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package view
 
 import (
 	"fmt"
-	"regexp"
+	"log/slog"
+	"math"
+	"strconv"
 	"strings"
 
-	"github.com/derailed/k9s/internal/client"
-	"github.com/derailed/k9s/internal/render"
+	"github.com/derailed/k9s/internal/port"
+	"github.com/derailed/k9s/internal/slogs"
 	"github.com/derailed/k9s/internal/ui"
 	"github.com/derailed/tview"
 )
@@ -14,10 +19,10 @@ import (
 const portForwardKey = "portforward"
 
 // PortForwardCB represents a port-forward callback function.
-type PortForwardCB func(v ResourceViewer, path, co string, mapper []client.PortTunnel)
+type PortForwardCB func(ResourceViewer, string, port.PortTunnels) error
 
 // ShowPortForwards pops a port forwarding configuration dialog.
-func ShowPortForwards(v ResourceViewer, path string, ports []string, okFn PortForwardCB) {
+func ShowPortForwards(v ResourceViewer, path string, ports port.ContainerPortSpecs, aa port.Annotations, okFn PortForwardCB) {
 	styles := v.App().Styles.Dialog()
 
 	f := tview.NewForm()
@@ -29,70 +34,76 @@ func ShowPortForwards(v ResourceViewer, path string, ports []string, okFn PortFo
 		SetFieldTextColor(styles.FieldFgColor.Color()).
 		SetFieldBackgroundColor(styles.BgColor.Color())
 
-	address := v.App().Config.CurrentCluster().PortForwardAddress
-
-	var p1, p2 string
-	if len(ports) > 0 {
-		p1, p2 = ports[0], extractPort(ports[0])
+	pf, err := aa.PreferredPorts(ports)
+	if err != nil {
+		slog.Warn("Unable to resolve preferred ports",
+			slogs.FQN, path,
+			slogs.Error, err,
+		)
 	}
 
-	f.AddInputField("Container Port:", p1, 30, nil, func(p string) {
-		p1 = p
-	})
-	f.AddInputField("Local Port:", p2, 30, nil, func(p string) {
+	p1, p2 := pf.ToPortSpec(ports)
+	fieldLen := int(math.Max(30, float64(len(p1))))
+	f.AddInputField("Container Port:", p1, fieldLen, nil, nil)
+	f.AddInputField("Local Port:", p2, fieldLen, nil, nil)
+	coField := f.GetFormItemByLabel("Container Port:").(*tview.InputField)
+	loField := f.GetFormItemByLabel("Local Port:").(*tview.InputField)
+	if coField.GetText() == "" {
+		coField.SetPlaceholder("Enter a container name::port")
+	}
+	coField.SetChangedFunc(func(s string) {
+		p := extractPort(s)
+		loField.SetText(p)
 		p2 = p
 	})
-	f.AddInputField("Address:", address, 30, nil, func(h string) {
+	if loField.GetText() == "" {
+		loField.SetPlaceholder("Enter a local port")
+	}
+	address := v.App().Config.K9s.PortForwardAddress
+	f.AddInputField("Address:", address, fieldLen, nil, func(h string) {
 		address = h
 	})
-	for i := 0; i < 3; i++ {
-		field, ok := f.GetFormItem(i).(*tview.InputField)
-		if !ok {
-			continue
+	for i := range 3 {
+		if field, ok := f.GetFormItem(i).(*tview.InputField); ok {
+			field.SetLabelColor(styles.LabelFgColor.Color())
+			field.SetFieldTextColor(styles.FieldFgColor.Color())
 		}
-		field.SetLabelColor(styles.LabelFgColor.Color())
-		field.SetFieldTextColor(styles.FieldFgColor.Color())
 	}
 
 	f.AddButton("OK", func() {
-		pp1 := strings.Split(p1, ",")
-		pp2 := strings.Split(p2, ",")
-		if len(pp1) == 0 || len(pp1) != len(pp2) {
+		if coField.GetText() == "" || loField.GetText() == "" {
 			v.App().Flash().Err(fmt.Errorf("container to local port mismatch"))
 			return
 		}
-		var tt []client.PortTunnel
-		for i := range pp1 {
-			tt = append(tt, client.PortTunnel{
-				Address:       address,
-				LocalPort:     pp2[i],
-				ContainerPort: extractPort(pp1[i]),
-			})
+		tt, err := port.ToTunnels(address, coField.GetText(), loField.GetText())
+		if err != nil {
+			v.App().Flash().Err(err)
+			return
 		}
-		okFn(v, path, extractContainer(pp1[0]), tt)
+		if err := okFn(v, path, tt); err != nil {
+			v.App().Flash().Err(err)
+		}
 	})
 	pages := v.App().Content.Pages
 	f.AddButton("Cancel", func() {
 		DismissPortForwards(v, pages)
 	})
-	for i := 0; i < 2; i++ {
-		b := f.GetButton(i)
-		if b == nil {
-			continue
+	for i := range 2 {
+		if b := f.GetButton(i); b != nil {
+			b.SetBackgroundColorActivated(styles.ButtonFocusBgColor.Color())
+			b.SetLabelColorActivated(styles.ButtonFocusFgColor.Color())
 		}
-		b.SetBackgroundColorActivated(styles.ButtonFocusBgColor.Color())
-		b.SetLabelColorActivated(styles.ButtonFocusFgColor.Color())
 	}
 
-	modal := tview.NewModalForm(fmt.Sprintf("<PortForward on %s>", path), f)
-
-	if len(ports) != 0 {
-		modal.SetText("Exposed Ports: " + strings.Join(ports, ","))
+	modal := tview.NewModalForm("<PortForward>", f)
+	msg := path
+	if len(ports) > 1 {
+		msg += "\n\nExposed Ports:\n" + ports.Dump()
 	}
-
+	modal.SetText(msg)
 	modal.SetTextColor(styles.FgColor.Color())
 	modal.SetBackgroundColor(styles.BgColor.Color())
-	modal.SetDoneFunc(func(_ int, b string) {
+	modal.SetDoneFunc(func(int, string) {
 		DismissPortForwards(v, pages)
 	})
 
@@ -111,25 +122,16 @@ func DismissPortForwards(v ResourceViewer, p *ui.Pages) {
 // Helpers...
 
 func extractPort(p string) string {
-	rx := regexp.MustCompile(`\A([\w|-]+)/?([\w|-]+)?:?(\d+)?(╱UDP)?\z`)
-	mm := rx.FindStringSubmatch(p)
-	if len(mm) != 5 {
+	tokens := strings.Split(p, "::")
+	if len(tokens) < 2 {
+		ports := strings.Split(p, ",")
+		for _, t := range ports {
+			if _, err := strconv.Atoi(strings.TrimSpace(t)); err != nil {
+				return ""
+			}
+		}
 		return p
 	}
-	for i := 3; i > 0; i-- {
-		if mm[i] != "" {
-			return mm[i]
-		}
-	}
-	return p
-}
 
-func extractContainer(p string) string {
-	tokens := strings.Split(p, ":")
-	if len(tokens) != 2 {
-		return render.NAValue
-	}
-
-	co, _ := client.Namespaced(tokens[0])
-	return co
+	return tokens[1]
 }

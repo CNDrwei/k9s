@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package model_test
 
 import (
@@ -8,17 +11,17 @@ import (
 )
 
 type testListener struct {
-	text  string
-	act   int
-	inact int
+	text, suggestion string
+	act              int
+	inact            int
 }
 
-func (l *testListener) BufferChanged(s string) {
-	l.text = s
+func (l *testListener) BufferChanged(t, s string) {
+	l.text, l.suggestion = t, s
 }
 
-func (l *testListener) BufferCompleted(s string) {
-	l.text = s
+func (l *testListener) BufferCompleted(t, s string) {
+	l.text, l.suggestion = t, s
 }
 
 func (l *testListener) BufferActive(s bool, _ model.BufferKind) {
@@ -62,22 +65,22 @@ func TestCmdBuffChanged(t *testing.T) {
 	b.Delete()
 	assert.Equal(t, 0, l.act)
 	assert.Equal(t, 0, l.inact)
-	assert.Equal(t, "", l.text)
-	assert.Equal(t, "", b.GetText())
+	assert.Empty(t, l.text)
+	assert.Empty(t, b.GetText())
 
 	b.Add('c')
 	b.ClearText(true)
 	assert.Equal(t, 0, l.act)
 	assert.Equal(t, 0, l.inact)
-	assert.Equal(t, "", l.text)
-	assert.Equal(t, "", b.GetText())
+	assert.Empty(t, l.text)
+	assert.Empty(t, b.GetText())
 
 	b.Add('c')
 	b.Reset()
 	assert.Equal(t, 0, l.act)
 	assert.Equal(t, 1, l.inact)
-	assert.Equal(t, "", l.text)
-	assert.Equal(t, "", b.GetText())
+	assert.Empty(t, l.text)
+	assert.Empty(t, b.GetText())
 	assert.True(t, b.Empty())
 }
 

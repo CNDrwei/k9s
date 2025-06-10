@@ -1,47 +1,48 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package render
 
 import (
 	"fmt"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/derailed/k9s/internal/model1"
+	"github.com/derailed/tcell/v2"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // Subject renders a rbac to screen.
-type Subject struct{}
-
-// Happy returns true if resoure is happy, false otherwise
-func (Subject) Happy(_ string, _ Row) bool {
-	return true
+type Subject struct {
+	Base
 }
 
 // ColorerFunc colors a resource row.
-func (Subject) ColorerFunc() ColorerFunc {
-	return func(ns string, _ Header, re RowEvent) tcell.Color {
+func (Subject) ColorerFunc() model1.ColorerFunc {
+	return func(string, model1.Header, *model1.RowEvent) tcell.Color {
 		return tcell.ColorMediumSpringGreen
 	}
 }
 
 // Header returns a header row.
-func (Subject) Header(ns string) Header {
-	return Header{
-		HeaderColumn{Name: "NAME"},
-		HeaderColumn{Name: "KIND"},
-		HeaderColumn{Name: "FIRST LOCATION"},
-		HeaderColumn{Name: "VALID", Wide: true},
+func (Subject) Header(string) model1.Header {
+	return model1.Header{
+		model1.HeaderColumn{Name: "NAME"},
+		model1.HeaderColumn{Name: "KIND"},
+		model1.HeaderColumn{Name: "FIRST LOCATION"},
+		model1.HeaderColumn{Name: "VALID", Attrs: model1.Attrs{Wide: true}},
 	}
 }
 
 // Render renders a K8s resource to screen.
-func (s Subject) Render(o interface{}, ns string, r *Row) error {
+func (s Subject) Render(o any, _ string, r *model1.Row) error {
 	res, ok := o.(SubjectRes)
 	if !ok {
-		return fmt.Errorf("Expected SubjectRes, but got %T", s)
+		return fmt.Errorf("expected SubjectRes, but got %T", s)
 	}
 
 	r.ID = res.Name
-	r.Fields = Fields{
+	r.Fields = model1.Fields{
 		res.Name,
 		res.Kind,
 		res.FirstLocation,
@@ -83,7 +84,7 @@ func (ss Subjects) Upsert(s SubjectRes) Subjects {
 	return ss
 }
 
-// Find locates a row by id. Retturns false is not found.
+// Find locates a row by id. Returns false is not found.
 func (ss Subjects) find(res string) (int, bool) {
 	for i, s := range ss {
 		if s.Name == res {

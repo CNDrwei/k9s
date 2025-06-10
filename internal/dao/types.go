@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package dao
 
 import (
@@ -15,28 +18,22 @@ import (
 	restclient "k8s.io/client-go/rest"
 )
 
-// ResourceMetas represents a collection of resource metadata.
-type ResourceMetas map[client.GVR]metav1.APIResource
-
-// Accessors represents a collection of dao accessors.
-type Accessors map[client.GVR]Accessor
-
 // Factory represents a resource factory.
 type Factory interface {
 	// Client retrieves an api client.
 	Client() client.Connection
 
 	// Get fetch a given resource.
-	Get(gvr, path string, wait bool, sel labels.Selector) (runtime.Object, error)
+	Get(gvr *client.GVR, path string, wait bool, sel labels.Selector) (runtime.Object, error)
 
 	// List fetch a collection of resources.
-	List(gvr, ns string, wait bool, sel labels.Selector) ([]runtime.Object, error)
+	List(gvr *client.GVR, ns string, wait bool, sel labels.Selector) ([]runtime.Object, error)
 
 	// ForResource fetch an informer for a given resource.
-	ForResource(ns, gvr string) (informers.GenericInformer, error)
+	ForResource(ns string, gvr *client.GVR) (informers.GenericInformer, error)
 
 	// CanForResource fetch an informer for a given resource if authorized
-	CanForResource(ns, gvr string, verbs []string) (informers.GenericInformer, error)
+	CanForResource(ns string, gvr *client.GVR, verbs []string) (informers.GenericInformer, error)
 
 	// WaitForCacheSync synchronize the cache.
 	WaitForCacheSync()
@@ -44,8 +41,14 @@ type Factory interface {
 	// DeleteForwarder deletes a pod forwarder.
 	DeleteForwarder(path string)
 
-	// Forwards returns all portforwards.
+	// Forwarders returns all portforwards.
 	Forwarders() watch.Forwarders
+}
+
+// ImageLister tracks resources with container images.
+type ImageLister interface {
+	// ListImages lists container images.
+	ListImages(ctx context.Context, path string) ([]string, error)
 }
 
 // Getter represents a resource getter.
@@ -66,10 +69,13 @@ type Accessor interface {
 	Getter
 
 	// Init the resource with a factory object.
-	Init(Factory, client.GVR)
+	Init(Factory, *client.GVR)
 
 	// GVR returns a gvr a string.
 	GVR() string
+
+	// SetIncludeObject toggles object inclusion.
+	SetIncludeObject(bool)
 }
 
 // DrainOptions tracks drain attributes.
@@ -77,8 +83,9 @@ type DrainOptions struct {
 	GracePeriodSeconds  int
 	Timeout             time.Duration
 	IgnoreAllDaemonSets bool
-	DeleteLocalData     bool
+	DeleteEmptyDirData  bool
 	Force               bool
+	DisableEviction     bool
 }
 
 // NodeMaintainer performs node maintenance operations.
@@ -92,8 +99,8 @@ type NodeMaintainer interface {
 
 // Loggable represents resources with logs.
 type Loggable interface {
-	// TaiLogs streams resource logs.
-	TailLogs(ctx context.Context, c LogChan, opts LogOptions) error
+	// TailLogs streams resource logs.
+	TailLogs(ctx context.Context, opts *LogOptions) ([]LogChan, error)
 }
 
 // Describer describes a resource.
@@ -111,6 +118,12 @@ type Scalable interface {
 	Scale(ctx context.Context, path string, replicas int32) error
 }
 
+// ReplicasGetter represents a resource with replicas.
+type ReplicasGetter interface {
+	// Replicas returns the number of replicas for the resource located at the given path.
+	Replicas(ctx context.Context, path string) (int32, error)
+}
+
 // Controller represents a pod controller.
 type Controller interface {
 	// Pod returns a pod instance matching the selector.
@@ -120,7 +133,7 @@ type Controller interface {
 // Nuker represents a resource deleter.
 type Nuker interface {
 	// Delete removes a resource from the api server.
-	Delete(path string, cascade, force bool) error
+	Delete(context.Context, string, *metav1.DeletionPropagation, Grace) error
 }
 
 // Switchable represents a switchable resource.
@@ -132,7 +145,7 @@ type Switchable interface {
 // Restartable represents a restartable resource.
 type Restartable interface {
 	// Restart performs a rollout restart.
-	Restart(ctx context.Context, path string) error
+	Restart(context.Context, string, *metav1.PatchOptions) error
 }
 
 // Runnable represents a runnable resource.
@@ -149,9 +162,21 @@ type Logger interface {
 
 // ContainsPodSpec represents a resource with a pod template.
 type ContainsPodSpec interface {
-	// Get PodSpec of a resource
+	// GetPodSpec returns a podspec for the resource.
 	GetPodSpec(path string) (*v1.PodSpec, error)
 
-	// Set Images for a resource
+	// SetImages sets container image.
 	SetImages(ctx context.Context, path string, imageSpecs ImageSpecs) error
+}
+
+// Sanitizer represents a resource sanitizer.
+type Sanitizer interface {
+	// Sanitize nukes all resources in unhappy state.
+	Sanitize(context.Context, string) (int, error)
+}
+
+// Valuer represents a resource with values.
+type Valuer interface {
+	// GetValues returns values for a resource.
+	GetValues(path string, allValues bool) ([]byte, error)
 }

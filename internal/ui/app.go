@@ -1,15 +1,19 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package ui
 
 import (
+	"log/slog"
 	"os"
 	"sync"
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/model"
+	"github.com/derailed/k9s/internal/slogs"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell/v2"
-	"github.com/rs/zerolog/log"
 )
 
 // App represents an application.
@@ -19,7 +23,7 @@ type App struct {
 
 	Main    *Pages
 	flash   *model.Flash
-	actions KeyActions
+	actions *KeyActions
 	views   map[string]tview.Primitive
 	cmdBuff *model.FishBuff
 	running bool
@@ -27,21 +31,20 @@ type App struct {
 }
 
 // NewApp returns a new app.
-func NewApp(cfg *config.Config, context string) *App {
+func NewApp(cfg *config.Config, _ string) *App {
 	a := App{
 		Application:  tview.NewApplication(),
-		actions:      make(KeyActions),
-		Configurator: Configurator{Config: cfg},
+		actions:      NewKeyActions(),
+		Configurator: Configurator{Config: cfg, Styles: config.NewStyles()},
 		Main:         NewPages(),
 		flash:        model.NewFlash(model.DefaultFlashDelay),
 		cmdBuff:      model.NewFishBuff(':', model.CommandBuffer),
 	}
-	a.ReloadStyles(context)
 
 	a.views = map[string]tview.Primitive{
 		"menu":   NewMenu(a.Styles),
 		"logo":   NewLogo(a.Styles),
-		"prompt": NewPrompt(a.Config.K9s.NoIcons, a.Styles),
+		"prompt": NewPrompt(&a, a.Config.K9s.UI.NoIcons, a.Styles),
 		"crumbs": NewCrumbs(a.Styles),
 	}
 
@@ -55,11 +58,14 @@ func (a *App) Init() {
 	a.cmdBuff.AddListener(a)
 	a.Styles.AddListener(a)
 
-	a.SetRoot(a.Main, true).EnableMouse(a.Config.K9s.EnableMouse)
+	a.SetRoot(a.Main, true).EnableMouse(a.Config.K9s.UI.EnableMouse)
 }
 
 // QueueUpdate queues up a ui action.
 func (a *App) QueueUpdate(f func()) {
+	if a.Application == nil {
+		return
+	}
 	go func() {
 		a.Application.QueueUpdate(f)
 	}()
@@ -67,6 +73,9 @@ func (a *App) QueueUpdate(f func()) {
 
 // QueueUpdateDraw queues up a ui action and redraw the ui.
 func (a *App) QueueUpdateDraw(f func()) {
+	if a.Application == nil {
+		return
+	}
 	go func() {
 		a.Application.QueueUpdateDraw(f)
 	}()
@@ -87,13 +96,13 @@ func (a *App) SetRunning(f bool) {
 }
 
 // BufferCompleted indicates input was accepted.
-func (a *App) BufferCompleted(s string) {}
+func (*App) BufferCompleted(_, _ string) {}
 
 // BufferChanged indicates the buffer was changed.
-func (a *App) BufferChanged(s string) {}
+func (*App) BufferChanged(_, _ string) {}
 
 // BufferActive indicates the buff activity changed.
-func (a *App) BufferActive(state bool, kind model.BufferKind) {
+func (a *App) BufferActive(state bool, _ model.BufferKind) {
 	flex, ok := a.Main.GetPrimitive("main").(*tview.Flex)
 	if !ok {
 		return
@@ -108,26 +117,23 @@ func (a *App) BufferActive(state bool, kind model.BufferKind) {
 }
 
 // SuggestionChanged notifies of update to command suggestions.
-func (a *App) SuggestionChanged(ss []string) {}
+func (*App) SuggestionChanged([]string) {}
 
 // StylesChanged notifies the skin changed.
 func (a *App) StylesChanged(s *config.Styles) {
 	a.Main.SetBackgroundColor(s.BgColor())
 	if f, ok := a.Main.GetPrimitive("main").(*tview.Flex); ok {
 		f.SetBackgroundColor(s.BgColor())
-		if h, ok := f.ItemAt(0).(*tview.Flex); ok {
-			h.SetBackgroundColor(s.BgColor())
-		} else {
-			log.Error().Msgf("Header not found")
+		if !a.Config.K9s.IsHeadless() {
+			if h, ok := f.ItemAt(0).(*tview.Flex); ok {
+				h.SetBackgroundColor(s.BgColor())
+			} else {
+				slog.Warn("Header not found", slogs.Subsys, "styles", slogs.Component, "app")
+			}
 		}
 	} else {
-		log.Error().Msgf("Main not found")
+		slog.Error("Main panel not found", slogs.Subsys, "styles", slogs.Component, "app")
 	}
-}
-
-// ReloadStyles reloads skin file.
-func (a *App) ReloadStyles(context string) {
-	a.RefreshStyles(context)
 }
 
 // Conn returns an api server connection.
@@ -136,23 +142,28 @@ func (a *App) Conn() client.Connection {
 }
 
 func (a *App) bindKeys() {
-	a.actions = KeyActions{
+	a.actions = NewKeyActionsFromMap(KeyMap{
 		KeyColon:       NewKeyAction("Cmd", a.activateCmd, false),
 		tcell.KeyCtrlR: NewKeyAction("Redraw", a.redrawCmd, false),
-		tcell.KeyCtrlC: NewKeyAction("Quit", a.quitCmd, false),
+		tcell.KeyCtrlP: NewKeyAction("Persist", a.saveCmd, false),
 		tcell.KeyCtrlU: NewSharedKeyAction("Clear Filter", a.clearCmd, false),
 		tcell.KeyCtrlQ: NewSharedKeyAction("Clear Filter", a.clearCmd, false),
-	}
+	})
 }
 
-// BailOut exists the application.
-func (a *App) BailOut() {
+// BailOut exits the application.
+func (a *App) BailOut(exitCode int) {
+	if err := a.Config.Save(true); err != nil {
+		slog.Error("Config save failed!", slogs.Error, err)
+	}
+
 	a.Stop()
-	os.Exit(0)
+	os.Exit(exitCode)
 }
 
 // ResetPrompt reset the prompt model and marks buffer as active.
 func (a *App) ResetPrompt(m PromptModel) {
+	m.ClearText(false)
 	a.Prompt().SetModel(m)
 	a.SetFocus(a.Prompt())
 	m.SetActive(true)
@@ -161,6 +172,15 @@ func (a *App) ResetPrompt(m PromptModel) {
 // ResetCmd clear out user command.
 func (a *App) ResetCmd() {
 	a.cmdBuff.Reset()
+}
+
+func (a *App) saveCmd(*tcell.EventKey) *tcell.EventKey {
+	if err := a.Config.Save(true); err != nil {
+		a.Flash().Err(err)
+	}
+	a.Flash().Info("current context config saved")
+
+	return nil
 }
 
 // ActivateCmd toggle command mode.
@@ -183,15 +203,6 @@ func (a *App) HasCmd() bool {
 	return a.cmdBuff.IsActive() && !a.cmdBuff.Empty()
 }
 
-func (a *App) quitCmd(evt *tcell.EventKey) *tcell.EventKey {
-	if a.InCmdMode() {
-		return evt
-	}
-	a.BailOut()
-
-	return nil
-}
-
 // InCmdMode check if command mode is active.
 func (a *App) InCmdMode() bool {
 	return a.Prompt().InCmdMode()
@@ -199,23 +210,20 @@ func (a *App) InCmdMode() bool {
 
 // HasAction checks if key matches a registered binding.
 func (a *App) HasAction(key tcell.Key) (KeyAction, bool) {
-	act, ok := a.actions[key]
-	return act, ok
+	return a.actions.Get(key)
 }
 
-// GetActions returns a collection of actiona.
-func (a *App) GetActions() KeyActions {
+// GetActions returns a collection of actions.
+func (a *App) GetActions() *KeyActions {
 	return a.actions
 }
 
-// AddActions returns the application actiona.
-func (a *App) AddActions(aa KeyActions) {
-	for k, v := range aa {
-		a.actions[k] = v
-	}
+// AddActions returns the application actions.
+func (a *App) AddActions(aa *KeyActions) {
+	a.actions.Merge(aa)
 }
 
-// Views return the application root viewa.
+// Views return the application root views.
 func (a *App) Views() map[string]tview.Primitive {
 	return a.views
 }
@@ -247,7 +255,7 @@ func (a *App) redrawCmd(evt *tcell.EventKey) *tcell.EventKey {
 
 // View Accessors...
 
-// Crumbs return app crumba.
+// Crumbs return app crumbs.
 func (a *App) Crumbs() *Crumbs {
 	return a.views["crumbs"].(*Crumbs)
 }
@@ -275,7 +283,7 @@ func (a *App) Flash() *model.Flash {
 // ----------------------------------------------------------------------------
 // Helpers...
 
-// AsKey converts rune to keyboard key.,
+// AsKey converts rune to keyboard key.
 func AsKey(evt *tcell.EventKey) tcell.Key {
 	if evt.Key() != tcell.KeyRune {
 		return evt.Key()

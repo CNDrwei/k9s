@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package client_test
 
 import (
@@ -8,7 +11,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	mv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	v1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -45,7 +47,7 @@ func TestToMB(t *testing.T) {
 
 func TestPodsMetrics(t *testing.T) {
 	uu := map[string]struct {
-		metrics *mv1beta1.PodMetricsList
+		metrics *v1beta1.PodMetricsList
 		eSize   int
 		e       client.PodsMetrics
 	}{
@@ -77,7 +79,7 @@ func TestPodsMetrics(t *testing.T) {
 			mmx := make(client.PodsMetrics)
 			m.PodsMetrics(u.metrics, mmx)
 
-			assert.Equal(t, u.eSize, len(mmx))
+			assert.Len(t, mmx, u.eSize)
 			if u.eSize == 0 {
 				return
 			}
@@ -102,7 +104,7 @@ func BenchmarkPodsMetrics(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for n := 0; n < b.N; n++ {
+	for range b.N {
 		m.PodsMetrics(&metrics, mmx)
 	}
 }
@@ -110,7 +112,7 @@ func BenchmarkPodsMetrics(b *testing.B) {
 func TestNodesMetrics(t *testing.T) {
 	uu := map[string]struct {
 		nodes   *v1.NodeList
-		metrics *mv1beta1.NodeMetricsList
+		metrics *v1beta1.NodeMetricsList
 		eSize   int
 		e       client.NodesMetrics
 	}{
@@ -173,7 +175,7 @@ func TestNodesMetrics(t *testing.T) {
 			mmx := make(client.NodesMetrics)
 			m.NodesMetrics(u.nodes, u.metrics, mmx)
 
-			assert.Equal(t, u.eSize, len(mmx))
+			assert.Len(t, mmx, u.eSize)
 			if u.eSize == 0 {
 				return
 			}
@@ -204,7 +206,7 @@ func BenchmarkNodesMetrics(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for n := 0; n < b.N; n++ {
+	for range b.N {
 		m.NodesMetrics(&nodes, &metrics, mmx)
 	}
 }
@@ -212,7 +214,7 @@ func BenchmarkNodesMetrics(b *testing.B) {
 func TestClusterLoad(t *testing.T) {
 	uu := map[string]struct {
 		nodes   *v1.NodeList
-		metrics *mv1beta1.NodeMetricsList
+		metrics *v1beta1.NodeMetricsList
 		eSize   int
 		e       client.ClusterMetrics
 	}{
@@ -238,7 +240,6 @@ func TestClusterLoad(t *testing.T) {
 			eSize: 0,
 		},
 		"ok": {
-
 			nodes: &v1.NodeList{
 				Items: []v1.Node{
 					makeNode("n1", "100m", "4Mi", "50m", "2Mi"),
@@ -264,8 +265,7 @@ func TestClusterLoad(t *testing.T) {
 		u := uu[k]
 		t.Run(k, func(t *testing.T) {
 			var cmx client.ClusterMetrics
-			m.ClusterLoad(u.nodes, u.metrics, &cmx)
-
+			_ = m.ClusterLoad(u.nodes, u.metrics, &cmx)
 			assert.Equal(t, u.e, cmx)
 		})
 	}
@@ -279,8 +279,8 @@ func BenchmarkClusterLoad(b *testing.B) {
 		},
 	}
 
-	metrics := mv1beta1.NodeMetricsList{
-		Items: []mv1beta1.NodeMetrics{
+	metrics := v1beta1.NodeMetricsList{
+		Items: []v1beta1.NodeMetrics{
 			*makeMxNode("n1", "50m", "1Mi"),
 			*makeMxNode("n2", "50m", "1Mi"),
 		},
@@ -290,8 +290,8 @@ func BenchmarkClusterLoad(b *testing.B) {
 	var mx client.ClusterMetrics
 	b.ResetTimer()
 	b.ReportAllocs()
-	for n := 0; n < b.N; n++ {
-		m.ClusterLoad(&nodes, &metrics, &mx)
+	for range b.N {
+		_ = m.ClusterLoad(&nodes, &metrics, &mx)
 	}
 }
 

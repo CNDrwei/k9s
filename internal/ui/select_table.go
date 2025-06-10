@@ -1,8 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package ui
 
 import (
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell/v2"
 )
 
 // SelectTable represents a table with selections.
@@ -12,7 +15,8 @@ type SelectTable struct {
 	model      Tabular
 	selectedFn func(string) string
 	marks      map[string]struct{}
-	fgColor    tcell.Color
+	selFgColor tcell.Color
+	selBgColor tcell.Color
 }
 
 // SetModel sets the table model.
@@ -41,7 +45,10 @@ func (s *SelectTable) SelectFirstRow() {
 // GetSelectedItems return currently marked or selected items names.
 func (s *SelectTable) GetSelectedItems() []string {
 	if len(s.marks) == 0 {
-		return []string{s.GetSelectedItem()}
+		if item := s.GetSelectedItem(); item != "" {
+			return []string{item}
+		}
+		return nil
 	}
 
 	items := make([]string, 0, len(s.marks))
@@ -52,7 +59,7 @@ func (s *SelectTable) GetSelectedItems() []string {
 	return items
 }
 
-// GetRowID returns the row id at at given location.
+// GetRowID returns the row id at given location.
 func (s *SelectTable) GetRowID(index int) (string, bool) {
 	cell := s.GetCell(index, 0)
 	if cell == nil {
@@ -96,26 +103,32 @@ func (s *SelectTable) GetSelectedRowIndex() int {
 }
 
 // SelectRow select a given row by index.
-func (s *SelectTable) SelectRow(r int, broadcast bool) {
+func (s *SelectTable) SelectRow(r, c int, broadcast bool) {
 	if !broadcast {
 		s.SetSelectionChangedFunc(nil)
 	}
+	if count := s.model.RowCount(); count > 0 && r-1 > count {
+		r = count + 1
+	}
 	defer s.SetSelectionChangedFunc(s.selectionChanged)
-	s.Select(r, 0)
+	s.Select(r, c)
 }
 
 // UpdateSelection refresh selected row.
 func (s *SelectTable) updateSelection(broadcast bool) {
-	r, _ := s.GetSelection()
-	s.SelectRow(r, broadcast)
+	r, c := s.GetSelection()
+	s.SelectRow(r, c, broadcast)
 }
 
 func (s *SelectTable) selectionChanged(r, c int) {
 	if r < 0 {
 		return
 	}
-	cell := s.GetCell(r, c)
-	s.SetSelectedStyle(tcell.StyleDefault.Foreground(s.fgColor).Background(cell.Color).Attributes(tcell.AttrBold))
+	if cell := s.GetCell(r, c); cell != nil {
+		s.SetSelectedStyle(
+			tcell.StyleDefault.Foreground(s.selFgColor).
+				Background(cell.Color).Attributes(tcell.AttrBold))
+	}
 }
 
 // ClearMarks delete all marked items.
@@ -130,7 +143,7 @@ func (s *SelectTable) DeleteMark(k string) {
 	delete(s.marks, k)
 }
 
-// ToggleMark toggles marked row
+// ToggleMark toggles marked row.
 func (s *SelectTable) ToggleMark() {
 	sel := s.GetSelectedItem()
 	if sel == "" {
@@ -142,14 +155,12 @@ func (s *SelectTable) ToggleMark() {
 		s.marks[sel] = struct{}{}
 	}
 
-	cell := s.GetCell(s.GetSelectedRowIndex(), 0)
-	if cell == nil {
-		return
+	if cell := s.GetCell(s.GetSelectedRowIndex(), 0); cell != nil {
+		s.SetSelectedStyle(tcell.StyleDefault.Foreground(cell.BackgroundColor).Background(cell.Color).Attributes(tcell.AttrBold))
 	}
-	s.SetSelectedStyle(tcell.StyleDefault.Foreground(cell.BackgroundColor).Background(cell.Color).Attributes(tcell.AttrBold))
 }
 
-// SpanMark toggles marked row
+// SpanMark toggles marked row.
 func (s *SelectTable) SpanMark() {
 	selIndex, prev := s.GetSelectedRowIndex(), -1
 	if selIndex <= 0 {
@@ -207,7 +218,7 @@ func (s *SelectTable) markRange(prev, curr int) {
 }
 
 // IsMarked returns true if this item was marked.
-func (s *Table) IsMarked(item string) bool {
+func (s *SelectTable) IsMarked(item string) bool {
 	_, ok := s.marks[item]
 	return ok
 }

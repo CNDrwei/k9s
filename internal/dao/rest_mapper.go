@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package dao
 
 import (
@@ -10,7 +13,7 @@ import (
 	"k8s.io/client-go/restmapper"
 )
 
-// RestMapping holds k8s resource mapping
+// RestMapping holds k8s resource mapping.
 var RestMapping = &RestMapper{}
 
 // RestMapper map resource to REST mapping ie kind, group, version.
@@ -25,7 +28,7 @@ func (r *RestMapper) ToRESTMapper() (meta.RESTMapper, error) {
 		return nil, err
 	}
 	mapper := restmapper.NewDeferredDiscoveryRESTMapper(dial)
-	expander := restmapper.NewShortcutExpander(mapper, dial)
+	expander := restmapper.NewShortcutExpander(mapper, dial, nil)
 
 	return expander, nil
 }
@@ -62,11 +65,12 @@ func (r *RestMapper) resourceFor(resourceArg string) (schema.GroupVersionResourc
 
 	gvr, err = mapper.ResourceFor(gr.WithVersion(""))
 	if err != nil {
-		if len(gr.Group) == 0 {
+		if gr.Group == "" {
 			return gvr, fmt.Errorf("the server doesn't have a resource type '%s'", gr.Resource)
 		}
 		return gvr, fmt.Errorf("the server doesn't have a resource type '%s' in group '%s'", gr.Resource, gr.Group)
 	}
+
 	return gvr, nil
 }
 

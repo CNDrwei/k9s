@@ -1,21 +1,35 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package dao
 
 import (
 	"context"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 )
 
-var _ Describer = (*Generic)(nil)
+type Grace int64
 
-var defaultKillGrace int64
+const (
+	// DefaultGrace uses delete default termination policy.
+	DefaultGrace Grace = -1
+
+	// ForceGrace sets delete grace-period to 0.
+	ForceGrace Grace = 0
+
+	// NowGrace set delete grace-period to 1,
+	NowGrace Grace = 1
+)
+
+var _ Describer = (*Generic)(nil)
 
 // Generic represents a generic resource.
 type Generic struct {
@@ -25,24 +39,25 @@ type Generic struct {
 // List returns a collection of resources.
 // BOZO!! no auth check??
 func (g *Generic) List(ctx context.Context, ns string) ([]runtime.Object, error) {
-	labelSel, _ := ctx.Value(internal.KeyLabels).(string)
+	labelSel, ok := ctx.Value(internal.KeyLabels).(labels.Selector)
+	if !ok {
+		labelSel = labels.Everything()
+	}
 	if client.IsAllNamespace(ns) {
-		ns = client.AllNamespaces
+		ns = client.BlankNamespace
 	}
 
-	var (
-		ll  *unstructured.UnstructuredList
-		err error
-	)
 	dial, err := g.dynClient()
 	if err != nil {
 		return nil, err
 	}
 
+	opts := metav1.ListOptions{LabelSelector: labelSel.String()}
+	var ll *unstructured.UnstructuredList
 	if client.IsClusterScoped(ns) {
-		ll, err = dial.List(ctx, metav1.ListOptions{LabelSelector: labelSel})
+		ll, err = dial.List(ctx, opts)
 	} else {
-		ll, err = dial.Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: labelSel})
+		ll, err = dial.Namespace(ns).List(ctx, opts)
 	}
 	if err != nil {
 		return nil, err
@@ -58,12 +73,13 @@ func (g *Generic) List(ctx context.Context, ns string) ([]runtime.Object, error)
 
 // Get returns a given resource.
 func (g *Generic) Get(ctx context.Context, path string) (runtime.Object, error) {
-	var opts metav1.GetOptions
 	ns, n := client.Namespaced(path)
 	dial, err := g.dynClient()
 	if err != nil {
 		return nil, err
 	}
+
+	var opts metav1.GetOptions
 	if client.IsClusterScoped(ns) {
 		return dial.Get(ctx, n, opts)
 	}
@@ -85,15 +101,15 @@ func (g *Generic) ToYAML(path string, showManaged bool) (string, error) {
 
 	raw, err := ToYAML(o, showManaged)
 	if err != nil {
-		return "", fmt.Errorf("unable to marshal resource %s", err)
+		return "", fmt.Errorf("unable to marshal resource %w", err)
 	}
 	return raw, nil
 }
 
 // Delete deletes a resource.
-func (g *Generic) Delete(path string, cascade, force bool) error {
+func (g *Generic) Delete(ctx context.Context, path string, propagation *metav1.DeletionPropagation, grace Grace) error {
 	ns, n := client.Namespaced(path)
-	auth, err := g.Client().CanI(ns, g.gvr.String(), []string{client.DeleteVerb})
+	auth, err := g.Client().CanI(ns, g.gvr, n, []string{client.DeleteVerb})
 	if err != nil {
 		return err
 	}
@@ -101,30 +117,24 @@ func (g *Generic) Delete(path string, cascade, force bool) error {
 		return fmt.Errorf("user is not authorized to delete %s", path)
 	}
 
-	p := metav1.DeletePropagationOrphan
-	if cascade {
-		p = metav1.DeletePropagationBackground
-	}
-	var grace *int64
-	if force {
-		grace = &defaultKillGrace
+	var gracePeriod *int64
+	if grace != DefaultGrace {
+		gracePeriod = (*int64)(&grace)
 	}
 	opts := metav1.DeleteOptions{
-		PropagationPolicy:  &p,
-		GracePeriodSeconds: grace,
+		PropagationPolicy:  propagation,
+		GracePeriodSeconds: gracePeriod,
 	}
 
 	dial, err := g.dynClient()
 	if err != nil {
 		return err
 	}
-	// BOZO!! Move to caller!
-	ctx, cancel := context.WithTimeout(context.Background(), g.Client().Config().CallTimeout())
-	defer cancel()
-
 	if client.IsClusterScoped(ns) {
 		return dial.Delete(ctx, n, opts)
 	}
+	ctx, cancel := context.WithTimeout(ctx, g.Client().Config().CallTimeout())
+	defer cancel()
 
 	return dial.Namespace(ns).Delete(ctx, n, opts)
 }

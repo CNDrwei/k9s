@@ -4,7 +4,7 @@
 .envrc
 cov.out
 execs
-k9s
+/k9s
 /k8s
 dist
 notes
@@ -21,3 +21,8 @@ faas
 .settings/*
 demos
 /code
+kind
+*.snap
+/stresser
+__debug_bin*
+fg.yaml

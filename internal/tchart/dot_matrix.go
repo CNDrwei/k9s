@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package tchart
 
 import (
@@ -42,11 +45,11 @@ func NewDotMatrix() DotMatrix {
 }
 
 // Print prints the matrix.
-func (d DotMatrix) Print(n int) Matrix {
+func (DotMatrix) Print(n int) Matrix {
 	return To3x3Char(n)
 }
 
-// To3x3Char returns 3x3 number matrix
+// To3x3Char returns 3x3 number matrix.
 func To3x3Char(numb int) Matrix {
 	switch numb {
 	case 1:

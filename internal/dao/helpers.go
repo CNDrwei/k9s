@@ -1,50 +1,85 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package dao
 
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
 	"math"
-	"regexp"
 
-	"github.com/derailed/tview"
-	runewidth "github.com/mattn/go-runewidth"
-	"github.com/rs/zerolog/log"
+	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/slogs"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/cli-runtime/pkg/printers"
 )
 
-var (
-	inverseRx = regexp.MustCompile(`\A\!`)
-	fuzzyRx   = regexp.MustCompile(`\A\-f`)
+const (
+	defaultServiceAccount = "default"
+
+	// DefaultContainerAnnotation represents the annotation key for the default container.
+	DefaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
 )
 
-// IsInverseSelector checks if inverse char has been provided.
-func IsInverseSelector(s string) bool {
-	if s == "" {
-		return false
+// GetDefaultContainer returns a container name if specified in an annotation.
+func GetDefaultContainer(m *metav1.ObjectMeta, spec *v1.PodSpec) (string, bool) {
+	defaultContainer, ok := m.Annotations[DefaultContainerAnnotation]
+	if !ok {
+		return "", false
 	}
-	return inverseRx.MatchString(s)
+
+	for i := range spec.Containers {
+		if spec.Containers[i].Name == defaultContainer {
+			return defaultContainer, true
+		}
+	}
+	slog.Warn("Container not found. Annotation ignored",
+		slogs.Container, defaultContainer,
+		slogs.Annotation, DefaultContainerAnnotation,
+	)
+
+	return "", false
 }
 
-// IsFuzzySelector checks if filter is fuzzy or not.
-func IsFuzzySelector(s string) bool {
-	if s == "" {
-		return false
+func extractFQN(o runtime.Object) string {
+	u, ok := o.(*unstructured.Unstructured)
+	if !ok {
+		slog.Error("Expecting unstructured", slogs.ResType, fmt.Sprintf("%T", o))
+		return client.NA
 	}
-	return fuzzyRx.MatchString(s)
+
+	return FQN(u.GetNamespace(), u.GetName())
 }
 
-func toPerc(v1, v2 float64) float64 {
-	if v2 == 0 {
+// FQN returns a fully qualified resource name.
+func FQN(ns, n string) string {
+	if ns == "" {
+		return n
+	}
+	return ns + "/" + n
+}
+
+func inList(ll []string, s string) bool {
+	for _, l := range ll {
+		if l == s {
+			return true
+		}
+	}
+	return false
+}
+
+func toPerc(v, dv float64) float64 {
+	if dv == 0 {
 		return 0
 	}
-	return math.Round((v1 / v2) * 100)
-}
 
-// Truncate a string to the given l and suffix ellipsis if needed.
-func Truncate(str string, width int) string {
-	return runewidth.Truncate(str, width, string(tview.SemigraphicsHorizontalEllipsis))
+	return math.Round((v / dv) * 100)
 }
 
 // ToYAML converts a resource to its YAML representation.
@@ -52,23 +87,55 @@ func ToYAML(o runtime.Object, showManaged bool) (string, error) {
 	if o == nil {
 		return "", errors.New("no object to yamlize")
 	}
+	u, ok := o.(*unstructured.Unstructured)
+	if !ok {
+		return "", fmt.Errorf("expecting unstructured but got %T", o)
+	}
+	if u.Object == nil {
+		return "", fmt.Errorf("expecting unstructured object but got nil")
+	}
 
+	mm := u.Object
 	var (
 		buff bytes.Buffer
 		p    printers.YAMLPrinter
 	)
 	if !showManaged {
-		o = o.DeepCopyObject()
-		uo := o.(*unstructured.Unstructured).Object
-		if meta, ok := uo["metadata"].(map[string]interface{}); ok {
+		mm = maps.Clone(mm)
+		if meta, ok := mm["metadata"].(map[string]any); ok {
 			delete(meta, "managedFields")
 		}
 	}
 	err := p.PrintObj(o, &buff)
 	if err != nil {
-		log.Error().Msgf("Marshal Error %v", err)
+		slog.Error("Marshal failed", slogs.Error, err)
 		return "", err
 	}
 
 	return buff.String(), nil
+}
+
+// serviceAccountMatches validates that the ServiceAccount referenced in the PodSpec matches the incoming
+// ServiceAccount. If the PodSpec ServiceAccount is blank kubernetes will use the "default" ServiceAccount
+// when deploying the pod, so if the incoming SA is "default" and podSA is an empty string that is also a match.
+func serviceAccountMatches(podSA, saName string) bool {
+	if podSA == "" {
+		podSA = defaultServiceAccount
+	}
+
+	return podSA == saName
+}
+
+// ContinuousRanges takes a sorted slice of integers and returns a slice of
+// sub-slices representing continuous ranges of integers.
+func ContinuousRanges(indexes []int) [][]int {
+	var ranges [][]int
+	for i, p := 1, 0; i <= len(indexes); i++ {
+		if i == len(indexes) || indexes[i]-indexes[p] != i-p {
+			ranges = append(ranges, []int{indexes[p], indexes[i-1] + 1})
+			p = i
+		}
+	}
+
+	return ranges
 }

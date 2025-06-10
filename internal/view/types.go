@@ -1,11 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package view
 
 import (
 	"context"
 
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/ui"
+	"github.com/derailed/k9s/internal/view/cmd"
 )
 
 const (
@@ -27,16 +32,16 @@ type (
 	BoostActionsFunc func(ui.KeyActions)
 
 	// EnterFunc represents an enter key action.
-	EnterFunc func(app *App, model ui.Tabular, gvr, path string)
+	EnterFunc func(app *App, model ui.Tabular, gvr *client.GVR, path string)
 
-	// ContainerFunc returns the active container name.
-	ContainerFunc func() string
+	// LogOptionsFunc returns the active log options.
+	LogOptionsFunc func(bool) (*dao.LogOptions, error)
 
 	// ContextFunc enhances a given context.
 	ContextFunc func(context.Context) context.Context
 
 	// BindKeysFunc adds new menu actions.
-	BindKeysFunc func(ui.KeyActions)
+	BindKeysFunc func(*ui.KeyActions)
 )
 
 // ActionExtender enhances a given viewer by adding new menu actions.
@@ -56,7 +61,7 @@ type Viewer interface {
 	model.Component
 
 	// Actions returns active menu bindings.
-	Actions() ui.KeyActions
+	Actions() *ui.KeyActions
 
 	// App returns an app handle.
 	App() *App
@@ -69,7 +74,7 @@ type Viewer interface {
 type TableViewer interface {
 	Viewer
 
-	// Table returns a table component.
+	// GetTable returns a table component.
 	GetTable() *Table
 }
 
@@ -81,16 +86,19 @@ type ResourceViewer interface {
 	SetEnvFn(EnvFunc)
 
 	// GVR returns a resource descriptor.
-	GVR() client.GVR
+	GVR() *client.GVR
 
 	// SetContextFn provision a custom context.
 	SetContextFn(ContextFunc)
 
-	// AddBindKeys provision additional key bindings.
+	// AddBindKeysFn provision additional key bindings.
 	AddBindKeysFn(BindKeysFunc)
 
 	// SetInstance sets a parent FQN
 	SetInstance(string)
+
+	// SetCommand sets the current command.
+	SetCommand(*cmd.Interpreter)
 }
 
 // LogViewer represents a log viewer.
@@ -119,7 +127,7 @@ type SubjectViewer interface {
 }
 
 // ViewerFunc returns a viewer matching a given gvr.
-type ViewerFunc func(client.GVR) ResourceViewer
+type ViewerFunc func(*client.GVR) ResourceViewer
 
 // MetaViewer represents a registered meta viewer.
 type MetaViewer struct {
@@ -128,4 +136,4 @@ type MetaViewer struct {
 }
 
 // MetaViewers represents a collection of meta viewers.
-type MetaViewers map[client.GVR]MetaViewer
+type MetaViewers map[*client.GVR]MetaViewer

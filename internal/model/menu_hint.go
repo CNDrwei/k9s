@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package model
 
 import (
 	"strconv"
-	"strings"
 )
 
 // MenuHint represents keyboard mnemonic.
@@ -25,7 +27,7 @@ func (m MenuHint) String() string {
 // MenuHints represents a collection of hints.
 type MenuHints []MenuHint
 
-// Len returns the hints length
+// Len returns the hints length.
 func (h MenuHints) Len() int {
 	return len(h)
 }
@@ -48,5 +50,5 @@ func (h MenuHints) Less(i, j int) bool {
 	if err1 != nil && err2 == nil {
 		return false
 	}
-	return strings.Compare(h[i].Description, h[j].Description) < 0
+	return h[i].Description < h[j].Description
 }

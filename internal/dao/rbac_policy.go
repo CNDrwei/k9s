@@ -1,13 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package dao
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/render"
-	"github.com/rs/zerolog/log"
+	"github.com/derailed/k9s/internal/slogs"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -25,7 +29,7 @@ type Policy struct {
 }
 
 // List returns available policies.
-func (p *Policy) List(ctx context.Context, ns string) ([]runtime.Object, error) {
+func (p *Policy) List(ctx context.Context, _ string) ([]runtime.Object, error) {
 	kind, ok := ctx.Value(internal.KeySubjectKind).(string)
 	if !ok {
 		return nil, fmt.Errorf("expecting a context subject kind")
@@ -61,11 +65,12 @@ func (p *Policy) loadClusterRoleBinding(kind, name string) (render.Policies, err
 		return nil, err
 	}
 
+	ns, n := client.Namespaced(name)
 	var nn []string
-	for _, crb := range crbs {
-		for _, s := range crb.Subjects {
-			if s.Kind == kind && s.Name == name {
-				nn = append(nn, crb.RoleRef.Name)
+	for i := range crbs {
+		for _, s := range crbs[i].Subjects {
+			if isSameSubject(kind, ns, n, &s) {
+				nn = append(nn, crbs[i].RoleRef.Name)
 			}
 		}
 	}
@@ -75,51 +80,56 @@ func (p *Policy) loadClusterRoleBinding(kind, name string) (render.Policies, err
 	}
 
 	rows := make(render.Policies, 0, len(nn))
-	for _, cr := range crs {
-		if !in(nn, cr.Name) {
+	for i := range crs {
+		if !inList(nn, crs[i].Name) {
 			continue
 		}
-		rows = append(rows, parseRules("*", "CR:"+cr.Name, cr.Rules)...)
+		rows = append(rows, parseRules(client.NotNamespaced, "CR:"+crs[i].Name, crs[i].Rules)...)
 	}
 
 	return rows, nil
 }
 
 func (p *Policy) loadRoleBinding(kind, name string) (render.Policies, error) {
-	ss, err := p.fetchRoleBindingSubjects(kind, name)
+	rbsMap, err := p.fetchRoleBindingNamespaces(kind, name)
 	if err != nil {
 		return nil, err
 	}
-
 	crs, err := p.fetchClusterRoles()
 	if err != nil {
 		return nil, err
 	}
 	rows := make(render.Policies, 0, len(crs))
-	for _, cr := range crs {
-		if !in(ss, "ClusterRole:"+cr.Name) {
-			continue
+	for i := range crs {
+		if rbNs, ok := rbsMap["ClusterRole:"+crs[i].Name]; ok {
+			slog.Debug("Loading rules for clusterrole",
+				slogs.Namespace, rbNs,
+				slogs.ResName, crs[i].Name,
+			)
+			rows = append(rows, parseRules(rbNs, "CR:"+crs[i].Name, crs[i].Rules)...)
 		}
-		rows = append(rows, parseRules("*", "CR:"+cr.Name, cr.Rules)...)
 	}
 
 	ros, err := p.fetchRoles()
 	if err != nil {
 		return nil, err
 	}
-	for _, ro := range ros {
-		if !in(ss, "Role:"+ro.Name) {
+	for i := range ros {
+		if _, ok := rbsMap["Role:"+ros[i].Name]; !ok {
 			continue
 		}
-		log.Debug().Msgf("Loading rules for role %q:%q", ro.Namespace, ro.Name)
-		rows = append(rows, parseRules(ro.Namespace, "RO:"+ro.Name, ro.Rules)...)
+		slog.Debug("Loading rules for role",
+			slogs.Namespace, ros[i].Namespace,
+			slogs.ResName, ros[i].Name,
+		)
+		rows = append(rows, parseRules(ros[i].Namespace, "RO:"+ros[i].Name, ros[i].Rules)...)
 	}
 
 	return rows, nil
 }
 
 func fetchClusterRoleBindings(f Factory) ([]rbacv1.ClusterRoleBinding, error) {
-	oo, err := f.List(crbGVR, client.ClusterScope, false, labels.Everything())
+	oo, err := f.List(client.CrbGVR, client.ClusterScope, false, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +147,7 @@ func fetchClusterRoleBindings(f Factory) ([]rbacv1.ClusterRoleBinding, error) {
 }
 
 func fetchRoleBindings(f Factory) ([]rbacv1.RoleBinding, error) {
-	oo, err := f.List(rbGVR, client.ClusterScope, false, labels.Everything())
+	oo, err := f.List(client.RobGVR, client.ClusterScope, false, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -154,16 +164,18 @@ func fetchRoleBindings(f Factory) ([]rbacv1.RoleBinding, error) {
 	return rbs, nil
 }
 
-func (p *Policy) fetchRoleBindingSubjects(kind, name string) ([]string, error) {
+func (p *Policy) fetchRoleBindingNamespaces(kind, name string) (map[string]string, error) {
 	rbs, err := fetchRoleBindings(p.Factory)
 	if err != nil {
 		return nil, err
 	}
-	ss := make([]string, 0, len(rbs))
-	for _, rb := range rbs {
-		for _, s := range rb.Subjects {
-			if s.Kind == kind && s.Name == name {
-				ss = append(ss, rb.RoleRef.Kind+":"+rb.Name)
+
+	ns, n := client.Namespaced(name)
+	ss := make(map[string]string, len(rbs))
+	for i := range rbs {
+		for _, s := range rbs[i].Subjects {
+			if isSameSubject(kind, ns, n, &s) {
+				ss[rbs[i].RoleRef.Kind+":"+rbs[i].RoleRef.Name] = rbs[i].Namespace
 			}
 		}
 	}
@@ -171,10 +183,22 @@ func (p *Policy) fetchRoleBindingSubjects(kind, name string) ([]string, error) {
 	return ss, nil
 }
 
-func (p *Policy) fetchClusterRoles() ([]rbacv1.ClusterRole, error) {
-	const gvr = "rbac.authorization.k8s.io/v1/clusterroles"
+// isSameSubject verifies if the incoming type name and namespace match a subject from a
+// cluster/roleBinding. A ServiceAccount will always have a namespace and needs to be validated to ensure
+// we don't display permissions for a ServiceAccount with the same name in a different namespace
+func isSameSubject(kind, ns, name string, subject *rbacv1.Subject) bool {
+	if subject.Kind != kind || subject.Name != name {
+		return false
+	}
+	if kind == rbacv1.ServiceAccountKind {
+		// Kind and name were checked above, check the namespace
+		return client.IsAllNamespaces(ns) || subject.Namespace == ns
+	}
+	return true
+}
 
-	oo, err := p.Factory.List(gvr, client.ClusterScope, false, labels.Everything())
+func (p *Policy) fetchClusterRoles() ([]rbacv1.ClusterRole, error) {
+	oo, err := p.getFactory().List(client.CrGVR, client.ClusterScope, false, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +207,7 @@ func (p *Policy) fetchClusterRoles() ([]rbacv1.ClusterRole, error) {
 	for i, o := range oo {
 		var cr rbacv1.ClusterRole
 		if e := runtime.DefaultUnstructuredConverter.FromUnstructured(o.(*unstructured.Unstructured).Object, &cr); e != nil {
-			return nil, err
+			return nil, e
 		}
 		crs[i] = cr
 	}
@@ -192,9 +216,7 @@ func (p *Policy) fetchClusterRoles() ([]rbacv1.ClusterRole, error) {
 }
 
 func (p *Policy) fetchRoles() ([]rbacv1.Role, error) {
-	const gvr = "rbac.authorization.k8s.io/v1/roles"
-
-	oo, err := p.Factory.List(gvr, client.AllNamespaces, false, labels.Everything())
+	oo, err := p.getFactory().List(client.RoGVR, client.BlankNamespace, false, labels.Everything())
 	if err != nil {
 		return nil, err
 	}

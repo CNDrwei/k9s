@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package dao
 
 import (
 	"context"
 	"errors"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -24,20 +27,20 @@ type Dir struct {
 // NewDir returns a new set of aliases.
 func NewDir(f Factory) *Dir {
 	var a Dir
-	a.Init(f, client.NewGVR("dir"))
+	a.Init(f, client.DirGVR)
 	return &a
 }
 
 var yamlRX = regexp.MustCompile(`.*\.(yml|yaml|json)`)
 
 // List returns a collection of aliases.
-func (a *Dir) List(ctx context.Context, _ string) ([]runtime.Object, error) {
+func (*Dir) List(ctx context.Context, _ string) ([]runtime.Object, error) {
 	dir, ok := ctx.Value(internal.KeyPath).(string)
 	if !ok {
-		return nil, errors.New("No dir in context")
+		return nil, errors.New("no dir in context")
 	}
 
-	files, err := ioutil.ReadDir(dir)
+	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -48,8 +51,8 @@ func (a *Dir) List(ctx context.Context, _ string) ([]runtime.Object, error) {
 			continue
 		}
 		oo = append(oo, render.DirRes{
-			Path: filepath.Join(dir, f.Name()),
-			Info: f,
+			Path:  filepath.Join(dir, f.Name()),
+			Entry: f,
 		})
 	}
 
@@ -57,6 +60,6 @@ func (a *Dir) List(ctx context.Context, _ string) ([]runtime.Object, error) {
 }
 
 // Get fetch a resource.
-func (a *Dir) Get(_ context.Context, _ string) (runtime.Object, error) {
-	return nil, errors.New("NYI!!")
+func (*Dir) Get(_ context.Context, _ string) (runtime.Object, error) {
+	return nil, errors.New("nyi")
 }

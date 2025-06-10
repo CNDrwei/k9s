@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package render
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/derailed/k9s/internal/model1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -30,36 +33,36 @@ var (
 )
 
 // Rbac renders a rbac to screen.
-type Rbac struct{}
+type Rbac struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
-func (Rbac) ColorerFunc() ColorerFunc {
-	return func(_ string, _ Header, _re RowEvent) tcell.Color {
-		return tcell.ColorMediumSpringGreen
-	}
+func (Rbac) ColorerFunc() model1.ColorerFunc {
+	return model1.DefaultColorer
 }
 
 // Header returns a header row.
-func (Rbac) Header(ns string) Header {
-	h := make(Header, 0, 10)
+func (Rbac) Header(string) model1.Header {
+	h := make(model1.Header, 0, 10)
 	h = append(h,
-		HeaderColumn{Name: "NAME"},
-		HeaderColumn{Name: "APIGROUP"},
+		model1.HeaderColumn{Name: "NAME"},
+		model1.HeaderColumn{Name: "API-GROUP"},
 	)
 	h = append(h, rbacVerbHeader()...)
 
-	return append(h, HeaderColumn{Name: "VALID", Wide: true})
+	return append(h, model1.HeaderColumn{Name: "VALID", Attrs: model1.Attrs{Wide: true}})
 }
 
 // Render renders a K8s resource to screen.
-func (r Rbac) Render(o interface{}, ns string, ro *Row) error {
-	p, ok := o.(PolicyRes)
+func (r Rbac) Render(o any, ns string, ro *model1.Row) error {
+	p, ok := o.(*PolicyRes)
 	if !ok {
-		return fmt.Errorf("expecting RuleRes but got %T", o)
+		return fmt.Errorf("expecting PolicyRes but got %T", o)
 	}
 
 	ro.ID = p.Resource
-	ro.Fields = make(Fields, 0, len(r.Header(ns)))
+	ro.Fields = make(model1.Fields, 0, len(r.Header(ns)))
 	ro.Fields = append(ro.Fields,
 		cleanseResource(p.Resource),
 		p.Group,
@@ -132,8 +135,8 @@ type RuleRes struct {
 }
 
 // NewRuleRes returns a new rule.
-func NewRuleRes(res, grp string, vv []string) RuleRes {
-	return RuleRes{
+func NewRuleRes(res, grp string, vv []string) *RuleRes {
+	return &RuleRes{
 		Resource: res,
 		Group:    grp,
 		Verbs:    vv,
@@ -141,20 +144,20 @@ func NewRuleRes(res, grp string, vv []string) RuleRes {
 }
 
 // GetObjectKind returns a schema object.
-func (r RuleRes) GetObjectKind() schema.ObjectKind {
+func (*RuleRes) GetObjectKind() schema.ObjectKind {
 	return nil
 }
 
 // DeepCopyObject returns a container copy.
-func (r RuleRes) DeepCopyObject() runtime.Object {
+func (r *RuleRes) DeepCopyObject() runtime.Object {
 	return r
 }
 
 // Rules represents a collection of rules.
-type Rules []RuleRes
+type Rules []*RuleRes
 
 // Upsert adds a new rule.
-func (rr Rules) Upsert(r RuleRes) Rules {
+func (rr Rules) Upsert(r *RuleRes) Rules {
 	idx, ok := rr.find(r.Resource)
 	if !ok {
 		return append(rr, r)
@@ -164,7 +167,7 @@ func (rr Rules) Upsert(r RuleRes) Rules {
 	return rr
 }
 
-// Find locates a row by id. Retturns false is not found.
+// Find locates a row by id. Returns false is not found.
 func (rr Rules) find(res string) (int, bool) {
 	for i, r := range rr {
 		if r.Resource == res {

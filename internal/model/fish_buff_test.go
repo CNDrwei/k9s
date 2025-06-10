@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package model_test
 
 import (
@@ -13,7 +16,7 @@ func TestFishAdd(t *testing.T) {
 
 	f := model.NewFishBuff(' ', model.FilterBuffer)
 	f.AddListener(&m)
-	f.SetSuggestionFn(func(text string) sort.StringSlice {
+	f.SetSuggestionFn(func(string) sort.StringSlice {
 		return sort.StringSlice{"blee", "brew"}
 	})
 	f.Add('b')
@@ -42,7 +45,7 @@ func TestFishDelete(t *testing.T) {
 
 	f := model.NewFishBuff(' ', model.FilterBuffer)
 	f.AddListener(&m)
-	f.SetSuggestionFn(func(text string) sort.StringSlice {
+	f.SetSuggestionFn(func(string) sort.StringSlice {
 		return sort.StringSlice{"blee", "duh"}
 	})
 	f.Add('a')
@@ -50,7 +53,7 @@ func TestFishDelete(t *testing.T) {
 	f.SetActive(true)
 
 	assert.Equal(t, 2, m.changeCount)
-	assert.Equal(t, 2, m.suggCount)
+	assert.Equal(t, 3, m.suggCount)
 	assert.True(t, m.active)
 	assert.Equal(t, "blee", m.suggestion)
 
@@ -75,19 +78,22 @@ type mockSuggestionListener struct {
 	active                 bool
 }
 
-func (m *mockSuggestionListener) BufferChanged(s string) {
+func (m *mockSuggestionListener) BufferChanged(_, _ string) {
 	m.changeCount++
 }
 
-func (m *mockSuggestionListener) BufferCompleted(s string) {
-	m.text = s
+func (m *mockSuggestionListener) BufferCompleted(text, suggest string) {
+	if m.suggestion != suggest {
+		m.suggCount++
+	}
+	m.text, m.suggestion = text, suggest
 }
 
-func (m *mockSuggestionListener) BufferActive(state bool, kind model.BufferKind) {
+func (m *mockSuggestionListener) BufferActive(state bool, _ model.BufferKind) {
 	m.active = state
 }
 
-func (m *mockSuggestionListener) SuggestionChanged(text, sugg string) {
+func (m *mockSuggestionListener) SuggestionChanged(_, sugg string) {
 	m.suggestion = sugg
 	m.suggCount++
 }

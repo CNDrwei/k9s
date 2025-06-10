@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package dao
 
 import (
@@ -43,7 +46,7 @@ type Element struct {
 	Name  string `json:"name"`
 }
 
-// GetTemplateJsonPatch builds a json patch string to update PodSpec images
+// GetTemplateJsonPatch builds a json patch string to update PodSpec images.
 func GetTemplateJsonPatch(imageSpecs ImageSpecs) ([]byte, error) {
 	jsonPatch := JsonPatch{
 		Spec: Spec{
@@ -72,7 +75,7 @@ func getPatchPodSpec(imageSpecs ImageSpecs) PodSpec {
 	return podSpec
 }
 
-func extractElements(imageSpecs ImageSpecs) (initElementsOrders []Element, initElements []Element, elementsOrders []Element, elements []Element) {
+func extractElements(imageSpecs ImageSpecs) (initElementsOrders, initElements, elementsOrders, elements []Element) {
 	for _, spec := range imageSpecs {
 		if spec.Init {
 			initElementsOrders = append(initElementsOrders, Element{Name: spec.Name})

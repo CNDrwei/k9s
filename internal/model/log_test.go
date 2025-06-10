@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package model_test
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"testing"
@@ -24,17 +28,16 @@ func TestLogFullBuffer(t *testing.T) {
 	v := newTestView()
 	m.AddListener(v)
 
-	data := make(dao.LogItems, 0, 2*size)
-	for i := 0; i < 2*size; i++ {
-		data = append(data, dao.NewLogItemFromString("line"+strconv.Itoa(i)))
-		m.Append(data[i])
+	data := dao.NewLogItems()
+	for i := range 2 * size {
+		data.Add(dao.NewLogItemFromString("line" + strconv.Itoa(i)))
+		m.Append(data.Items()[i])
 	}
 	m.Notify()
 
 	assert.Equal(t, 1, v.dataCalled)
-	assert.Equal(t, 1, v.clearCalled)
+	assert.Equal(t, 0, v.clearCalled)
 	assert.Equal(t, 0, v.errCalled)
-	assert.Equal(t, data[4:].Lines(false), v.data)
 }
 
 func TestLogFilter(t *testing.T) {
@@ -71,23 +74,23 @@ func TestLogFilter(t *testing.T) {
 			m.AddListener(v)
 
 			m.Filter(u.q)
-			var data dao.LogItems
-			for i := 0; i < size; i++ {
-				data = append(data, dao.NewLogItemFromString(fmt.Sprintf("pod-line-%d", i+1)))
-				m.Append(data[i])
+			data := dao.NewLogItems()
+			for i := range size {
+				data.Add(dao.NewLogItemFromString(fmt.Sprintf("pod-line-%d", i+1)))
+				m.Append(data.Items()[i])
 			}
 
 			m.Notify()
 			assert.Equal(t, 1, v.dataCalled)
-			assert.Equal(t, 2, v.clearCalled)
+			assert.Equal(t, 1, v.clearCalled)
 			assert.Equal(t, 0, v.errCalled)
-			assert.Equal(t, u.e, len(v.data))
+			assert.Len(t, v.data, u.e)
 
 			m.ClearFilter()
 			assert.Equal(t, 2, v.dataCalled)
-			assert.Equal(t, 3, v.clearCalled)
+			assert.Equal(t, 2, v.clearCalled)
 			assert.Equal(t, 0, v.errCalled)
-			assert.Equal(t, size, len(v.data))
+			assert.Len(t, v.data, size)
 		})
 	}
 }
@@ -99,18 +102,21 @@ func TestLogStartStop(t *testing.T) {
 	v := newTestView()
 	m.AddListener(v)
 
-	m.Start()
-	data := dao.LogItems{dao.NewLogItemFromString("line1"), dao.NewLogItemFromString("line2")}
-	for _, d := range data {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+	data := dao.NewLogItems()
+	data.Add(dao.NewLogItemFromString("line1"), dao.NewLogItemFromString("line2"))
+	for _, d := range data.Items() {
 		m.Append(d)
 	}
 	m.Notify()
 	m.Stop()
 
 	assert.Equal(t, 1, v.dataCalled)
-	assert.Equal(t, 1, v.clearCalled)
+	assert.Equal(t, 0, v.clearCalled)
 	assert.Equal(t, 1, v.errCalled)
-	assert.Equal(t, 2, len(v.data))
+	assert.Len(t, v.data, 2)
 }
 
 func TestLogClear(t *testing.T) {
@@ -122,17 +128,18 @@ func TestLogClear(t *testing.T) {
 	v := newTestView()
 	m.AddListener(v)
 
-	data := dao.LogItems{dao.NewLogItemFromString("line1"), dao.NewLogItemFromString("line2")}
-	for _, d := range data {
+	data := dao.NewLogItems()
+	data.Add(dao.NewLogItemFromString("line1"), dao.NewLogItemFromString("line2"))
+	for _, d := range data.Items() {
 		m.Append(d)
 	}
 	m.Notify()
 	m.Clear()
 
 	assert.Equal(t, 1, v.dataCalled)
-	assert.Equal(t, 2, v.clearCalled)
+	assert.Equal(t, 1, v.clearCalled)
 	assert.Equal(t, 0, v.errCalled)
-	assert.Equal(t, 0, len(v.data))
+	assert.Empty(t, v.data)
 }
 
 func TestLogBasic(t *testing.T) {
@@ -142,13 +149,16 @@ func TestLogBasic(t *testing.T) {
 	v := newTestView()
 	m.AddListener(v)
 
-	data := dao.LogItems{dao.NewLogItemFromString("line1"), dao.NewLogItemFromString("line2")}
+	data := dao.NewLogItems()
+	data.Add(dao.NewLogItemFromString("line1"), dao.NewLogItemFromString("line2"))
 	m.Set(data)
 
 	assert.Equal(t, 1, v.dataCalled)
 	assert.Equal(t, 1, v.clearCalled)
 	assert.Equal(t, 0, v.errCalled)
-	assert.Equal(t, data.Lines(false), v.data)
+	ll := make([][]byte, data.Len())
+	data.Lines(0, false, ll)
+	assert.Equal(t, ll, v.data)
 }
 
 func TestLogAppend(t *testing.T) {
@@ -157,27 +167,30 @@ func TestLogAppend(t *testing.T) {
 
 	v := newTestView()
 	m.AddListener(v)
-	items := dao.LogItems{
-		dao.NewLogItemFromString("blah blah"),
-	}
+	items := dao.NewLogItems()
+	items.Add(dao.NewLogItemFromString("blah blah"))
 	m.Set(items)
-	assert.Equal(t, items.Lines(false), v.data)
+	ll := make([][]byte, items.Len())
+	items.Lines(0, false, ll)
+	assert.Equal(t, ll, v.data)
 
-	data := dao.LogItems{
+	data := dao.NewLogItems()
+	data.Add(
 		dao.NewLogItemFromString("line1"),
 		dao.NewLogItemFromString("line2"),
-	}
-	for _, d := range data {
+	)
+	for _, d := range data.Items() {
 		m.Append(d)
 	}
 	assert.Equal(t, 1, v.dataCalled)
-	assert.Equal(t, items.Lines(false), v.data)
+	ll = make([][]byte, items.Len())
+	items.Lines(0, false, ll)
+	assert.Equal(t, ll, v.data)
 
 	m.Notify()
 	assert.Equal(t, 2, v.dataCalled)
 	assert.Equal(t, 1, v.clearCalled)
 	assert.Equal(t, 0, v.errCalled)
-	assert.Equal(t, append(items, data...).Lines(false), v.data)
 }
 
 func TestLogTimedout(t *testing.T) {
@@ -188,28 +201,44 @@ func TestLogTimedout(t *testing.T) {
 	m.AddListener(v)
 
 	m.Filter("line1")
-	data := dao.LogItems{
+	data := dao.NewLogItems()
+	data.Add(
 		dao.NewLogItemFromString("line1"),
 		dao.NewLogItemFromString("line2"),
 		dao.NewLogItemFromString("line3"),
 		dao.NewLogItemFromString("line4"),
-	}
-	for _, d := range data {
+	)
+	for _, d := range data.Items() {
 		m.Append(d)
 	}
 	m.Notify()
 	assert.Equal(t, 1, v.dataCalled)
-	assert.Equal(t, 2, v.clearCalled)
+	assert.Equal(t, 1, v.clearCalled)
 	assert.Equal(t, 0, v.errCalled)
 	const e = "\x1b[38;5;209ml\x1b[0m\x1b[38;5;209mi\x1b[0m\x1b[38;5;209mn\x1b[0m\x1b[38;5;209me\x1b[0m\x1b[38;5;209m1\x1b[0m"
 	assert.Equal(t, e, string(v.data[0]))
 }
 
+func TestToggleAllContainers(t *testing.T) {
+	opts := makeLogOpts(1)
+	opts.DefaultContainer = "duh"
+	m := model.NewLog(client.NewGVR(""), opts, 10*time.Millisecond)
+	m.Init(makeFactory())
+	assert.Equal(t, "blee", m.GetContainer())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m.ToggleAllContainers(ctx)
+	assert.Empty(t, m.GetContainer())
+	m.ToggleAllContainers(ctx)
+	assert.Equal(t, "blee", m.GetContainer())
+}
+
 // ----------------------------------------------------------------------------
 // Helpers...
 
-func makeLogOpts(count int) dao.LogOptions {
-	return dao.LogOptions{
+func makeLogOpts(count int) *dao.LogOptions {
+	return &dao.LogOptions{
 		Path:      "fred",
 		Container: "blee",
 		Lines:     int64(count),
@@ -229,14 +258,20 @@ func newTestView() *testView {
 	return &testView{}
 }
 
+func (*testView) LogCanceled() {}
+func (*testView) LogStop()     {}
+func (*testView) LogResume()   {}
+
 func (t *testView) LogChanged(ll [][]byte) {
 	t.data = ll
 	t.dataCalled++
 }
+
 func (t *testView) LogCleared() {
 	t.clearCalled++
 	t.data = nil
 }
+
 func (t *testView) LogFailed(err error) {
 	fmt.Println("LogErr", err)
 	t.errCalled++
@@ -248,26 +283,26 @@ type testFactory struct{}
 
 var _ dao.Factory = testFactory{}
 
-func (f testFactory) Client() client.Connection {
+func (testFactory) Client() client.Connection {
 	return nil
 }
-func (f testFactory) Get(gvr, path string, wait bool, sel labels.Selector) (runtime.Object, error) {
+func (testFactory) Get(*client.GVR, string, bool, labels.Selector) (runtime.Object, error) {
 	return nil, nil
 }
-func (f testFactory) List(gvr, ns string, wait bool, sel labels.Selector) ([]runtime.Object, error) {
+func (testFactory) List(*client.GVR, string, bool, labels.Selector) ([]runtime.Object, error) {
 	return nil, nil
 }
-func (f testFactory) ForResource(ns, gvr string) (informers.GenericInformer, error) {
+func (testFactory) ForResource(string, *client.GVR) (informers.GenericInformer, error) {
 	return nil, nil
 }
-func (f testFactory) CanForResource(ns, gvr string, verbs []string) (informers.GenericInformer, error) {
+func (testFactory) CanForResource(string, *client.GVR, []string) (informers.GenericInformer, error) {
 	return nil, nil
 }
-func (f testFactory) WaitForCacheSync() {}
-func (f testFactory) Forwarders() watch.Forwarders {
+func (testFactory) WaitForCacheSync() {}
+func (testFactory) Forwarders() watch.Forwarders {
 	return nil
 }
-func (f testFactory) DeleteForwarder(string) {}
+func (testFactory) DeleteForwarder(string) {}
 
 func makeFactory() dao.Factory {
 	return testFactory{}

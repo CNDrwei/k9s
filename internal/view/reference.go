@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package view
 
 import (
 	"context"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/gdamore/tcell/v2"
+	"github.com/derailed/tcell/v2"
 )
 
 // Reference represents resource references.
@@ -15,11 +17,10 @@ type Reference struct {
 }
 
 // NewReference returns a new alias view.
-func NewReference(gvr client.GVR) ResourceViewer {
+func NewReference(gvr *client.GVR) ResourceViewer {
 	r := Reference{
 		ResourceViewer: NewBrowser(gvr),
 	}
-	r.GetTable().SetColorerFn(render.Reference{}.ColorerFunc())
 	r.GetTable().SetBorderFocusColor(tcell.ColorMediumSpringGreen)
 	r.GetTable().SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorMediumSpringGreen).Attributes(tcell.AttrNone))
 	r.AddBindKeysFn(r.bindKeys)
@@ -32,15 +33,15 @@ func (r *Reference) Init(ctx context.Context) error {
 	if err := r.ResourceViewer.Init(ctx); err != nil {
 		return err
 	}
-	r.GetTable().GetModel().SetNamespace(client.AllNamespaces)
+	r.GetTable().GetModel().SetNamespace(client.BlankNamespace)
 
 	return nil
 }
 
-func (r *Reference) bindKeys(aa ui.KeyActions) {
+func (r *Reference) bindKeys(aa *ui.KeyActions) {
 	aa.Delete(ui.KeyShiftA, tcell.KeyCtrlS, tcell.KeyCtrlSpace, ui.KeySpace)
 	aa.Delete(tcell.KeyCtrlW, tcell.KeyCtrlL, tcell.KeyCtrlZ)
-	aa.Add(ui.KeyActions{
+	aa.Bulk(ui.KeyMap{
 		tcell.KeyEnter: ui.NewKeyAction("Goto", r.gotoCmd, true),
 		ui.KeyShiftV:   ui.NewKeyAction("Sort GVR", r.GetTable().SortColCmd("GVR", true), false),
 	})
@@ -53,11 +54,9 @@ func (r *Reference) gotoCmd(evt *tcell.EventKey) *tcell.EventKey {
 	}
 
 	path := r.GetTable().GetSelectedItem()
+	ns, _ := client.Namespaced(path)
 	gvr := ui.TrimCell(r.GetTable().SelectTable, row, 2)
-
-	if err := r.App().gotoResource(client.NewGVR(gvr).R(), path, false); err != nil {
-		r.App().Flash().Err(err)
-	}
+	r.App().gotoResource(client.NewGVR(gvr).String()+" "+ns, path, false, true)
 
 	return evt
 }

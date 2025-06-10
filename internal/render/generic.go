@@ -1,120 +1,63 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package render
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/derailed/k9s/internal/client"
-	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
+	"github.com/derailed/k9s/internal/model1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-const ageTableCol = "Age"
+var defaultGENHeader = model1.Header{
+	model1.HeaderColumn{Name: "NAMESPACE"},
+	model1.HeaderColumn{Name: "NAME"},
+	model1.HeaderColumn{Name: "VALID", Attrs: model1.Attrs{Wide: true}},
+	model1.HeaderColumn{Name: "AGE", Attrs: model1.Attrs{Time: true}},
+}
 
-// Generic renders a generic resource to screen.
+// Generic renders a K8s generic resource to screen.
 type Generic struct {
-	table *metav1beta1.Table
-
-	ageIndex int
-}
-
-// Happy returns true if resource is happy, false otherwise
-func (Generic) Happy(ns string, r Row) bool {
-	return true
-}
-
-// SetTable sets the tabular resource.
-func (g *Generic) SetTable(t *metav1beta1.Table) {
-	g.table = t
-}
-
-// ColorerFunc colors a resource row.
-func (Generic) ColorerFunc() ColorerFunc {
-	return DefaultColorer
+	Base
 }
 
 // Header returns a header row.
-func (g *Generic) Header(ns string) Header {
-	if g.table == nil {
-		return Header{}
-	}
-	h := make(Header, 0, len(g.table.ColumnDefinitions))
-	h = append(h, HeaderColumn{Name: "NAMESPACE"})
-	for i, c := range g.table.ColumnDefinitions {
-		if c.Name == ageTableCol {
-			g.ageIndex = i
-			continue
-		}
-		h = append(h, HeaderColumn{Name: strings.ToUpper(c.Name)})
-	}
-	if g.ageIndex > 0 {
-		h = append(h, HeaderColumn{Name: "AGE", Time: true})
-	}
-
-	return h
+func (m Generic) Header(_ string) model1.Header {
+	return m.doHeader(defaultGENHeader)
 }
 
 // Render renders a K8s resource to screen.
-func (g *Generic) Render(o interface{}, ns string, r *Row) error {
-	row, ok := o.(metav1beta1.TableRow)
+func (m Generic) Render(o any, _ string, row *model1.Row) error {
+	raw, ok := o.(*unstructured.Unstructured)
 	if !ok {
-		return fmt.Errorf("expecting a TableRow but got %T", o)
+		return fmt.Errorf("expected Unstructured, but got %T", o)
 	}
-	nns, err := resourceNS(row.Object.Raw)
+	if err := m.defaultRow(raw, row); err != nil {
+		return err
+	}
+	if m.specs.isEmpty() {
+		return nil
+	}
+	cols, err := m.specs.realize(o.(*unstructured.Unstructured), defaultGENHeader, row)
 	if err != nil {
 		return err
 	}
-
-	n, ok := row.Cells[0].(string)
-	if !ok {
-		return fmt.Errorf("expecting row 0 to be a string but got %T", row.Cells[0])
-	}
-	r.ID = client.FQN(nns, n)
-	r.Fields = make(Fields, 0, len(g.Header(ns)))
-	r.Fields = append(r.Fields, nns)
-	var ageCell interface{}
-	for i, c := range row.Cells {
-		if g.ageIndex > 0 && i == g.ageIndex {
-			ageCell = c
-			continue
-		}
-		if c == nil {
-			r.Fields = append(r.Fields, Blank)
-			continue
-		}
-		r.Fields = append(r.Fields, fmt.Sprintf("%v", c))
-	}
-	if ageCell != nil {
-		r.Fields = append(r.Fields, fmt.Sprintf("%v", ageCell))
-	}
+	cols.hydrateRow(row)
 
 	return nil
 }
 
-// ----------------------------------------------------------------------------
-// Helpers...
-
-func resourceNS(raw []byte) (string, error) {
-	var obj map[string]interface{}
-	err := json.Unmarshal(raw, &obj)
-	if err != nil {
-		return "", err
+// Render renders a K8s resource to screen.
+func (Generic) defaultRow(raw *unstructured.Unstructured, r *model1.Row) error {
+	r.ID = client.FQN(raw.GetNamespace(), raw.GetName())
+	r.Fields = model1.Fields{
+		raw.GetNamespace(),
+		raw.GetName(),
+		"",
+		ToAge(raw.GetCreationTimestamp()),
 	}
 
-	meta, ok := obj["metadata"].(map[string]interface{})
-	if !ok {
-		return "", errors.New("no metadata found on generic resource")
-	}
-
-	ns, ok := meta["namespace"]
-	if !ok {
-		return client.ClusterScope, nil
-	}
-
-	nns, ok := ns.(string)
-	if !ok {
-		return "", fmt.Errorf("expecting namespace string type but got %T", ns)
-	}
-	return nns, nil
+	return nil
 }

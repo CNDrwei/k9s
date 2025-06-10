@@ -1,29 +1,38 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package watch
 
 import (
+	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
-	"github.com/derailed/k9s/internal/client"
-	"github.com/rs/zerolog/log"
+	"github.com/derailed/k9s/internal/port"
+	"github.com/derailed/k9s/internal/slogs"
 	"k8s.io/client-go/tools/portforward"
 )
 
 // Forwarder represents a port forwarder.
 type Forwarder interface {
 	// Start starts a port-forward.
-	Start(path, co string, tt []client.PortTunnel) (*portforward.PortForwarder, error)
+	Start(path string, tunnel port.PortTunnel) (*portforward.PortForwarder, error)
 
 	// Stop terminates a port forward.
 	Stop()
 
-	// Path returns a resource FQN.
-	Path() string
+	// ID returns the pf id.
+	ID() string
 
 	// Container returns a container name.
 	Container() string
 
-	// Ports returns container exposed ports.
-	Ports() []string
+	// Port returns the port mapping.
+	Port() string
+
+	// Address returns the host address.
+	Address() string
 
 	// FQN returns the full port-forward name.
 	FQN() string
@@ -35,7 +44,7 @@ type Forwarder interface {
 	SetActive(bool)
 
 	// Age returns forwarder age.
-	Age() string
+	Age() time.Time
 
 	// HasPortMapping returns true if port mapping exists.
 	HasPortMapping(string) bool
@@ -49,28 +58,34 @@ func NewForwarders() Forwarders {
 	return make(map[string]Forwarder)
 }
 
-// IsPodForwarded checks if pod has a forward
-func (ff Forwarders) IsPodForwarded(path string) bool {
+// IsPodForwarded checks if pod has a forward.
+func (ff Forwarders) IsPodForwarded(fqn string) bool {
+	fqn += "|"
 	for k := range ff {
-		fqn := strings.Split(k, ":")
-		if fqn[0] == path {
+		if strings.HasPrefix(k, fqn) {
 			return true
 		}
 	}
+
 	return false
 }
 
-// IsContainerForwarded checks if pod has a forward
-func (ff Forwarders) IsContainerForwarded(path, co string) bool {
-	_, ok := ff[path+":"+co]
+// IsContainerForwarded checks if pod has a forward.
+func (ff Forwarders) IsContainerForwarded(fqn, co string) bool {
+	fqn += "|" + co
+	for k := range ff {
+		if strings.HasPrefix(k, fqn) {
+			return true
+		}
+	}
 
-	return ok
+	return false
 }
 
 // DeleteAll stops and delete all port-forwards.
 func (ff Forwarders) DeleteAll() {
 	for k, f := range ff {
-		log.Debug().Msgf("Deleting forwarder %s", f.Path())
+		slog.Debug("Deleting forwarder", slogs.ID, f.ID())
 		f.Stop()
 		delete(ff, k)
 	}
@@ -78,16 +93,17 @@ func (ff Forwarders) DeleteAll() {
 
 // Kill stops and delete a port-forwards associated with pod.
 func (ff Forwarders) Kill(path string) int {
-	hasContainer := strings.Contains(path, ":")
 	var stats int
+
+	// The way port forwards are stored is `pod_fqn|container|local_port:container_port`
+	// The '|' is added to make sure we do not delete port forwards from other pods that have the same prefix
+	// Without the `|` port forwards for pods, default/web-0 and default/web-0-bla would be both deleted
+	// even if we want only port forwards for default/web-0 to be deleted
+	prefix := path + "|"
 	for k, f := range ff {
-		victim := k
-		if !hasContainer {
-			victim = strings.Split(k, ":")[0]
-		}
-		if victim == path {
+		if k == path || strings.HasPrefix(k, prefix) {
 			stats++
-			log.Debug().Msgf("Stop + Delete port-forward %s", k)
+			slog.Debug("Stop and delete port-forward", slogs.Name, k)
 			f.Stop()
 			delete(ff, k)
 		}
@@ -98,8 +114,8 @@ func (ff Forwarders) Kill(path string) int {
 
 // Dump for debug!
 func (ff Forwarders) Dump() {
-	log.Debug().Msgf("----------- PORT-FORWARDS --------------")
+	slog.Debug("----------- PORT-FORWARDS --------------")
 	for k, f := range ff {
-		log.Debug().Msgf("  %s -- %#v", k, f)
+		slog.Debug(fmt.Sprintf("  %s -- %s", k, f))
 	}
 }

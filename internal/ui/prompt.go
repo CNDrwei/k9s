@@ -1,12 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package ui
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/model"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell/v2"
 )
 
 const (
@@ -34,13 +38,16 @@ type Suggester interface {
 	ClearSuggestions()
 }
 
-// PromptModel represents a prompt buffer
+// PromptModel represents a prompt buffer.
 type PromptModel interface {
 	// SetText sets the model text.
-	SetText(string)
+	SetText(txt, sug string)
 
 	// GetText returns the current text.
 	GetText() string
+
+	// GetSuggestion returns the current suggestion.
+	GetSuggestion() string
 
 	// ClearText clears out model text.
 	ClearText(fire bool)
@@ -71,16 +78,19 @@ type PromptModel interface {
 type Prompt struct {
 	*tview.TextView
 
+	app     *App
 	noIcons bool
 	icon    rune
 	styles  *config.Styles
 	model   PromptModel
 	spacer  int
+	mx      sync.RWMutex
 }
 
 // NewPrompt returns a new command view.
-func NewPrompt(noIcons bool, styles *config.Styles) *Prompt {
+func NewPrompt(app *App, noIcons bool, styles *config.Styles) *Prompt {
 	p := Prompt{
+		app:      app,
 		styles:   styles,
 		noIcons:  noIcons,
 		TextView: tview.NewTextView(),
@@ -94,15 +104,13 @@ func NewPrompt(noIcons bool, styles *config.Styles) *Prompt {
 	p.SetDynamicColors(true)
 	p.SetBorder(true)
 	p.SetBorderPadding(0, 0, 1, 1)
-	p.SetBackgroundColor(styles.BgColor())
-	p.SetTextColor(styles.FgColor())
 	styles.AddListener(&p)
 	p.SetInputCapture(p.keyboard)
 
 	return &p
 }
 
-// SendKey sends an keyboard event (testing only!).
+// SendKey sends a keyboard event (testing only!).
 func (p *Prompt) SendKey(evt *tcell.EventKey) {
 	p.keyboard(evt)
 }
@@ -111,6 +119,14 @@ func (p *Prompt) SendKey(evt *tcell.EventKey) {
 func (p *Prompt) SendStrokes(s string) {
 	for _, r := range s {
 		p.keyboard(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+}
+
+// Deactivate sets the prompt as inactive.
+func (p *Prompt) Deactivate() {
+	if p.model != nil {
+		p.model.ClearText(true)
+		p.model.SetActive(false)
 	}
 }
 
@@ -129,30 +145,38 @@ func (p *Prompt) keyboard(evt *tcell.EventKey) *tcell.EventKey {
 		return evt
 	}
 
+	//nolint:exhaustive
 	switch evt.Key() {
 	case tcell.KeyBackspace2, tcell.KeyBackspace, tcell.KeyDelete:
 		p.model.Delete()
+
 	case tcell.KeyRune:
 		p.model.Add(evt.Rune())
+
 	case tcell.KeyEscape:
 		p.model.ClearText(true)
 		p.model.SetActive(false)
+
 	case tcell.KeyEnter, tcell.KeyCtrlE:
-		p.model.SetText(p.model.GetText())
+		p.model.SetText(p.model.GetText(), "")
 		p.model.SetActive(false)
+
 	case tcell.KeyCtrlW, tcell.KeyCtrlU:
 		p.model.ClearText(true)
+
 	case tcell.KeyUp:
 		if s, ok := m.NextSuggestion(); ok {
-			p.suggest(p.model.GetText(), s)
+			p.model.SetText(p.model.GetText(), s)
 		}
+
 	case tcell.KeyDown:
 		if s, ok := m.PrevSuggestion(); ok {
-			p.suggest(p.model.GetText(), s)
+			p.model.SetText(p.model.GetText(), s)
 		}
+
 	case tcell.KeyTab, tcell.KeyRight, tcell.KeyCtrlF:
 		if s, ok := m.CurrentSuggestion(); ok {
-			p.model.SetText(p.model.GetText() + s)
+			p.model.SetText(p.model.GetText()+s, "")
 			m.ClearSuggestions()
 		}
 	}
@@ -163,8 +187,8 @@ func (p *Prompt) keyboard(evt *tcell.EventKey) *tcell.EventKey {
 // StylesChanged notifies skin changed.
 func (p *Prompt) StylesChanged(s *config.Styles) {
 	p.styles = s
-	p.SetBackgroundColor(s.BgColor())
-	p.SetTextColor(s.FgColor())
+	p.SetBackgroundColor(s.K9s.Prompt.BgColor.Color())
+	p.SetTextColor(s.K9s.Prompt.FgColor.Color())
 }
 
 // InCmdMode returns true if command is active, false otherwise.
@@ -176,47 +200,60 @@ func (p *Prompt) InCmdMode() bool {
 }
 
 func (p *Prompt) activate() {
+	p.Clear()
 	p.SetCursorIndex(len(p.model.GetText()))
-	p.write(p.model.GetText(), "")
+	p.write(p.model.GetText(), p.model.GetSuggestion())
 	p.model.Notify(false)
 }
 
-func (p *Prompt) update(s string) {
-	p.Clear()
-	p.write(s, "")
+func (p *Prompt) Clear() {
+	p.mx.Lock()
+	defer p.mx.Unlock()
+
+	p.TextView.Clear()
 }
 
-func (p *Prompt) suggest(text, suggestion string) {
+func (p *Prompt) Draw(sc tcell.Screen) {
+	p.mx.RLock()
+	defer p.mx.RUnlock()
+
+	p.TextView.Draw(sc)
+}
+
+func (p *Prompt) update(text, suggestion string) {
 	p.Clear()
 	p.write(text, suggestion)
 }
 
 func (p *Prompt) write(text, suggest string) {
+	p.mx.Lock()
+	defer p.mx.Unlock()
+
 	p.SetCursorIndex(p.spacer + len(text))
 	txt := text
 	if suggest != "" {
-		txt += "[gray::-]" + suggest
+		txt += fmt.Sprintf("[%s::-]%s", p.styles.Prompt().SuggestColor, suggest)
 	}
-	fmt.Fprintf(p, defaultPrompt, p.icon, txt)
+	p.StylesChanged(p.styles)
+	_, _ = fmt.Fprintf(p, defaultPrompt, p.icon, txt)
 }
 
 // ----------------------------------------------------------------------------
 // Event Listener protocol...
 
 // BufferCompleted indicates input was accepted.
-func (p *Prompt) BufferCompleted(s string) {
-	p.update(s)
+func (p *Prompt) BufferCompleted(text, suggestion string) {
+	p.update(text, suggestion)
 }
 
 // BufferChanged indicates the buffer was changed.
-func (p *Prompt) BufferChanged(s string) {
-	p.update(s)
+func (p *Prompt) BufferChanged(text, suggestion string) {
+	p.update(text, suggestion)
 }
 
 // SuggestionChanged notifies the suggestion changed.
-func (p *Prompt) SuggestionChanged(text, sugg string) {
-	p.Clear()
-	p.write(text, sugg)
+func (p *Prompt) SuggestionChanged(text, suggestion string) {
+	p.update(text, suggestion)
 }
 
 // BufferActive indicates the buff activity changed.
@@ -225,7 +262,7 @@ func (p *Prompt) BufferActive(activate bool, kind model.BufferKind) {
 		p.ShowCursor(true)
 		p.SetBorder(true)
 		p.SetTextColor(p.styles.FgColor())
-		p.SetBorderColor(colorFor(kind))
+		p.SetBorderColor(p.colorFor(kind))
 		p.icon = p.iconFor(kind)
 		p.activate()
 		return
@@ -242,6 +279,7 @@ func (p *Prompt) iconFor(k model.BufferKind) rune {
 		return ' '
 	}
 
+	//nolint:exhaustive
 	switch k {
 	case model.CommandBuffer:
 		return '🐶'
@@ -253,11 +291,12 @@ func (p *Prompt) iconFor(k model.BufferKind) rune {
 // ----------------------------------------------------------------------------
 // Helpers...
 
-func colorFor(k model.BufferKind) tcell.Color {
+func (p *Prompt) colorFor(k model.BufferKind) tcell.Color {
+	//nolint:exhaustive
 	switch k {
 	case model.CommandBuffer:
-		return tcell.ColorAqua
+		return p.styles.Prompt().Border.CommandColor.Color()
 	default:
-		return tcell.ColorSeaGreen
+		return p.styles.Prompt().Border.DefaultColor.Color()
 	}
 }

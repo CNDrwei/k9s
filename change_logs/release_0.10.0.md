@@ -20,11 +20,11 @@ I would also like to take this opportunity to thank all of you for your kind PRs
 
 ## VatDoesDisDo?
 
-Most of the refactors are around K8s resource fetching and viewing as well as navigation changes. Based on our observations this release might load resources a bit slower than usual but should make navigation much faster once the cache is primed. We've made some improvements to be more consistent with navigation, menus and shortcuts management. We've got ride off the breadcrumbs navigation ie no more `p` to nav back. Crumbs are now just tracking a natural resoure navigation ie pod -> containers -> logs and no longer commands history. Each new command will now load a brand new breadcrumb. You can press `<esc>` to nav back to the previous page. We're also introducing a new hotkeys feature, that afforts creating shortcuts to navigate to your favorite resources ie shift-0 -> view pods, shift-1 -> view deployments (See HotKey section below). I know there were many outstanding PRS (Thank you to all that I've submitted!) and given the extent of the changes, I've resolved to incorporate them in manually vs having to deal with merge conflicts.
+Most of the refactors are around K8s resource fetching and viewing as well as navigation changes. Based on our observations this release might load resources a bit slower than usual but should make navigation much faster once the cache is primed. We've made some improvements to be more consistent with navigation, menus and shortcuts management. We've got ride off the breadcrumbs navigation ie no more `p` to nav back. Crumbs are now just tracking a natural resource navigation ie pod -> containers -> logs and no longer commands history. Each new command will now load a brand new breadcrumb. You can press `<esc>` to nav back to the previous page. We're also introducing a new hotkeys feature, that efforts creating shortcuts to navigate to your favorite resources ie shift-0 -> view pods, shift-1 -> view deployments (See HotKey section below). I know there were many outstanding PRS (Thank you to all that I've submitted!) and given the extent of the changes, I've resolved to incorporate them in manually vs having to deal with merge conflicts.
 
 ## Custom Skins Per Cluster
 
-In this release, we've added support for skins at the cluster level. Do you want K9s to look differently based on which cluster you're connecting to? All you'll need is to name the skin file in the K9s home directory as follows `mycluster_skin.yml`. If no cluster specific skin file is found, the standard `skin.yml` file will be loaded if present. Please checkout the `skins` directory in this repo or PR me if you have cool skins you'd like to share with your fellow K9ers as they will be featured in these release notes and in the project README.
+In this release, we've added support for skins at the cluster level. Do you want K9s to look differently based on which cluster you're connecting to? All you'll need is to name the skin file in the K9s home directory as follows `mycluster_skin.yml`. If no cluster specific skin file is found, the standard `skin.yml` file will be loaded if present. Please checkout the `skins` directory in this repo or PR me if you have cool skins you'd like to share with your fellow K9sers as they will be featured in these release notes and in the project README.
 
 ## Hot(Ness)?
 
@@ -55,7 +55,7 @@ Feeling like you want to be able to quickly switch around your favorite resource
 
  Not feeling too `Hot`? No worried, your custom hotkeys list will be listed in the help view.`<?>`.
 
- You can choose any keyboard shotcuts that make sense to you, provided they are not part of the standard K9s shortcuts list.
+ You can choose any keyboard shortcuts that make sense to you, provided they are not part of the standard K9s shortcuts list.
 
 ## PullRequests
 

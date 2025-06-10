@@ -38,13 +38,13 @@ Also I'd like to take this opportunity to recognize and thank a few folks that h
 * [Eldad Assis](https://github.com/eldada)
 * [Tobias](https://github.com/mycrEEpy)
 * [Helge Sychla](https://github.com/hsychla)
-* [Markusi75](https://github.com/Makusi75)
+* [Makusi75](https://github.com/Makusi75)
 * [Swe-Covis](https://github.com/swe-covis)
 * [Evgeniy Shubin](https://github.com/com30n)
 
 ## Search Enabled For Describe/YAML views
 
-In this drop we made the Describe/YAML views searchable. So you no longer need to plow thru your resource configurations and get directly to the just of it by using the search command ie `/elvis` + `enter`. You can use the familiar keys `n` and `N` to nav back and forth to the next occurrence in a circular buffer fashion once you've reached the BOF/EOF. It's the little things in life...
+In this drop we made the Describe/YAML views searchable. So you no longer need to plow thru your resource configurations and get directly to the gist of it by using the search command ie `/elvis` + `enter`. You can use the familiar keys `n` and `N` to nav back and forth to the next occurrence in a circular buffer fashion once you've reached the BOF/EOF. It's the little things in life...
 
 ## And On Another Note...
 

@@ -23,7 +23,7 @@ Big thanks in full effect to you all, I am so humbled and honored by your kind a
 
 ### Dracula Skin
 
-Since we're in the thank you phase, might as well lasso in [Josh Symonds](https://github.com/Veraticus) for contributing the `Dracula` K9s skin that is now available in this repo under the skins directory. Here is a sneak peek of what K9s looks like under that skin. I am hopeful that like minded `graphically` inclined K9ers will contribute cool skins for this project for us to share/use in our Kubernetes clusters.
+Since we're in the thank you phase, might as well lasso in [Josh Symonds](https://github.com/Veraticus) for contributing the `Dracula` K9s skin that is now available in this repo under the skins directory. Here is a sneak peek of what K9s looks like under that skin. I am hopeful that like minded `graphically` inclined K9sers will contribute cool skins for this project for us to share/use in our Kubernetes clusters.
 
 <img src="https://raw.githubusercontent.com/derailed/k9s/master/assets/skins/dracula.png"/>
 
@@ -33,7 +33,7 @@ Since we're in the thank you phase, might as well lasso in [Josh Symonds](https:
 
 Since we've launched K9s, we've longed for a view that would display the relationships among resources. For instance, pods may reference configmaps/secrets directly via volumes or indirectly with containers referencing configmaps/secrets via say env vars. Having the ability to know which pods/deployments use a given configmap may involve some serious `kubectl` wizardry. K9s now has xray vision which allows one to view and traverse these relationships/associations as well as check for referential integrity.
 
-For this, we are introducing a new command aka `xray`. Xray initally supports the following resources (more to come later...)
+For this, we are introducing a new command aka `xray`. Xray initially supports the following resources (more to come later...)
 
 1. Deployments
 2. Services

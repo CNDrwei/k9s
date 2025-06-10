@@ -30,14 +30,14 @@ Thank you so much for your support and awesome suggestions to make K9s better!!
    ```
 
    These commands will pull all the available cluster and role bindings associated with these subject types.
-   Use select + `<enter>` to see the associated RBACK policy rules.
+   Use select + `<enter>` to see the associated RBAC policy rules.
    You can also filter/sort, like in any other K9s views with the added bonus of auto updates when new user/group bindings come into your clusters.
 
    To see ServiceAccount RBAC policies, you can navigate to the serviceaccount view aka `:sa` and select + `<enter>` to view the associated policy rules.
 
 ### o ~~FuView~~ is now PolicyView
 
-  The Fu command has been depracated for pol(icy) command to see all RBAC policies available on a subject. You can use `pol` (instead of `fu`) to list out RBAC policies associated with a
+  The Fu command has been deprecated for pol(icy) command to see all RBAC policies available on a subject. You can use `pol` (instead of `fu`) to list out RBAC policies associated with a
   user/group or serviceaccount.
 
   ```text

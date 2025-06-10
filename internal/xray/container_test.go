@@ -1,10 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package xray_test
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/derailed/k9s/internal"
@@ -13,9 +17,8 @@ import (
 	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/watch"
 	"github.com/derailed/k9s/internal/xray"
-
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -24,17 +27,17 @@ import (
 )
 
 func init() {
-	zerolog.SetGlobalLevel(zerolog.FatalLevel)
+	slog.SetDefault(slog.New(slog.DiscardHandler))
 }
 
 func TestCOConfigMapRefs(t *testing.T) {
 	var re xray.Container
 
-	root := xray.NewTreeNode("root", "root")
+	root := xray.NewTreeNode(client.NewGVR("root"), "root")
 	ctx := context.WithValue(context.Background(), xray.KeyParent, root)
 	ctx = context.WithValue(ctx, internal.KeyFactory, makeFactory())
 
-	assert.Nil(t, re.Render(ctx, "", render.ContainerRes{Container: makeCMContainer("c1", false)}))
+	require.NoError(t, re.Render(ctx, "", render.ContainerRes{Container: makeCMContainer("c1", false)}))
 	assert.Equal(t, xray.MissingRefStatus, root.Children[0].Children[0].Extras[xray.StatusKey])
 }
 
@@ -86,11 +89,11 @@ func TestCORefs(t *testing.T) {
 		u := uu[k]
 		t.Run(k, func(t *testing.T) {
 			var re xray.Container
-			root := xray.NewTreeNode("root", "root")
+			root := xray.NewTreeNode(client.NewGVR("root"), "root")
 			ctx := context.WithValue(context.Background(), xray.KeyParent, root)
 			ctx = context.WithValue(ctx, internal.KeyFactory, makeFactory())
 
-			assert.Nil(t, re.Render(ctx, "", u.co))
+			require.NoError(t, re.Render(ctx, "", u.co))
 			assert.Equal(t, u.level1, root.CountChildren())
 			assert.Equal(t, u.level2, root.Children[0].CountChildren())
 			assert.Equal(t, u.e, root.Children[0].Children[0].Extras[xray.StatusKey])
@@ -106,7 +109,7 @@ func makeFactory() testFactory {
 }
 
 type testFactory struct {
-	rows map[string][]runtime.Object
+	rows map[*client.GVR][]runtime.Object
 }
 
 var _ dao.Factory = testFactory{}
@@ -114,24 +117,28 @@ var _ dao.Factory = testFactory{}
 func (f testFactory) Client() client.Connection {
 	return nil
 }
-func (f testFactory) Get(gvr, path string, wait bool, sel labels.Selector) (runtime.Object, error) {
+
+func (f testFactory) Get(gvr *client.GVR, _ string, _ bool, _ labels.Selector) (runtime.Object, error) {
 	oo, ok := f.rows[gvr]
 	if ok && len(oo) > 0 {
 		return oo[0], nil
 	}
 	return nil, nil
 }
-func (f testFactory) List(gvr, ns string, wait bool, sel labels.Selector) ([]runtime.Object, error) {
+
+func (f testFactory) List(gvr *client.GVR, _ string, _ bool, _ labels.Selector) ([]runtime.Object, error) {
 	oo, ok := f.rows[gvr]
 	if ok {
 		return oo, nil
 	}
 	return nil, nil
 }
-func (f testFactory) ForResource(ns, gvr string) (informers.GenericInformer, error) {
+
+func (f testFactory) ForResource(string, *client.GVR) (informers.GenericInformer, error) {
 	return nil, nil
 }
-func (f testFactory) CanForResource(ns, gvr string, verbs []string) (informers.GenericInformer, error) {
+
+func (f testFactory) CanForResource(string, *client.GVR, []string) (informers.GenericInformer, error) {
 	return nil, nil
 }
 func (f testFactory) WaitForCacheSync() {}
@@ -235,12 +242,12 @@ func makeDoubleCMKeysContainer(n string, optional bool) *v1.Container {
 }
 
 func load(t *testing.T, n string) *unstructured.Unstructured {
-	raw, err := ioutil.ReadFile(fmt.Sprintf("testdata/%s.json", n))
-	assert.Nil(t, err)
+	raw, err := os.ReadFile(fmt.Sprintf("testdata/%s.json", n))
+	require.NoError(t, err)
 
 	var o unstructured.Unstructured
 	err = json.Unmarshal(raw, &o)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	return &o
 }
