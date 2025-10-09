@@ -544,7 +544,7 @@ func TestConfigLoad(t *testing.T) {
 	cfg := mock.NewMockConfig(t)
 
 	require.NoError(t, cfg.Load("testdata/configs/k9s.yaml", true))
-	assert.Equal(t, 2, cfg.K9s.RefreshRate)
+	assert.InDelta(t, 2.0, cfg.K9s.RefreshRate, 0.001)
 	assert.Equal(t, int64(200), cfg.K9s.Logger.TailCount)
 	assert.Equal(t, 2000, cfg.K9s.Logger.BufferSize)
 }
@@ -561,6 +561,9 @@ func TestConfigSaveFile(t *testing.T) {
 	require.NoError(t, cfg.Load("testdata/configs/k9s.yaml", true))
 
 	cfg.K9s.RefreshRate = 100
+	cfg.K9s.GPUVendors = map[string]string{
+		"bozo": "bozo/gpu.com",
+	}
 	cfg.K9s.APIServerTimeout = "30s"
 	cfg.K9s.ReadOnly = true
 	cfg.K9s.Logger.TailCount = 500

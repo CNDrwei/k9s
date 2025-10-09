@@ -153,6 +153,10 @@ func (a *APIClient) CanI(ns string, gvr *GVR, name string, verbs []string) (auth
 	if IsClusterWide(ns) {
 		ns = BlankNamespace
 	}
+	if gvr == HmGVR {
+		// helm stores release data in secrets
+		gvr = SecGVR
+	}
 	key := makeCacheKey(ns, gvr, name, verbs)
 	if v, ok := a.cache.Get(key); ok {
 		if auth, ok = v.(bool); ok {
@@ -180,7 +184,7 @@ func (a *APIClient) CanI(ns string, gvr *GVR, name string, verbs []string) (auth
 			slogs.Verb, verbs,
 		)
 		if resp != nil {
-			clog.Debug("[CAN] reps",
+			clog.Debug("[CAN] response",
 				slogs.AuthStatus, resp.Status.Allowed,
 				slogs.AuthReason, resp.Status.Reason,
 			)
@@ -192,7 +196,7 @@ func (a *APIClient) CanI(ns string, gvr *GVR, name string, verbs []string) (auth
 		}
 		if !resp.Status.Allowed {
 			a.cache.Add(key, false, cacheExpiry)
-			return auth, fmt.Errorf("`%s access denied for user on %q:%s", v, ns, gvr)
+			return auth, fmt.Errorf("(%s) access denied for user on resource %q:%s in namespace %q", v, name, gvr, ns)
 		}
 	}
 	auth = true
@@ -266,6 +270,7 @@ func (a *APIClient) ValidNamespaceNames() (NamespaceNames, error) {
 
 	ok, err := a.CanI(ClusterScope, NsGVR, "", ListAccess)
 	if !ok || err != nil {
+		a.cache.Add(cacheNSKey, NamespaceNames{}, cacheExpiry)
 		return nil, fmt.Errorf("user not authorized to list all namespaces")
 	}
 

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"regexp"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/derailed/k9s/internal/client"
@@ -99,9 +100,12 @@ func (c *Command) contextCmd(p *cmd.Interpreter, pushCmd bool) error {
 		return useContext(c.app, ct)
 	}
 
-	gvr, v, err := c.viewMetaFor(p)
+	gvr, v, comd, err := c.viewMetaFor(p)
 	if err != nil {
 		return err
+	}
+	if comd != nil {
+		p = comd
 	}
 
 	return c.exec(p, gvr, c.componentFor(gvr, ct, v), true, pushCmd)
@@ -114,7 +118,8 @@ func (*Command) namespaceCmd(p *cmd.Interpreter) bool {
 	}
 
 	if ns != "" {
-		_ = p.Reset("pod " + ns)
+		_ = p.Reset(client.PodGVR.String(), "")
+		p.SwitchNS(ns)
 	}
 
 	return false
@@ -124,7 +129,7 @@ func (c *Command) aliasCmd(p *cmd.Interpreter, pushCmd bool) error {
 	filter, _ := p.FilterArg()
 
 	v := NewAlias(client.AliGVR)
-	v.SetFilter(filter)
+	v.SetFilter(filter, true)
 
 	return c.exec(p, client.AliGVR, v, false, pushCmd)
 }
@@ -134,7 +139,7 @@ func (c *Command) xrayCmd(p *cmd.Interpreter, pushCmd bool) error {
 	if !ok {
 		return errors.New("invalid command. use `xray xxx`")
 	}
-	gvr, _, ok := c.alias.AsGVR(arg)
+	gvr, ok := c.alias.Resolve(cmd.NewInterpreter(arg))
 	if !ok {
 		return fmt.Errorf("invalid resource name: %q", arg)
 	}
@@ -152,7 +157,7 @@ func (c *Command) xrayCmd(p *cmd.Interpreter, pushCmd bool) error {
 		return err
 	}
 
-	return c.exec(p, client.NewGVR("xrays"), NewXray(gvr), true, pushCmd)
+	return c.exec(p, client.XGVR, NewXray(gvr), true, pushCmd)
 }
 
 // Run execs the command by showing associated display.
@@ -160,9 +165,12 @@ func (c *Command) run(p *cmd.Interpreter, fqn string, clearStack, pushCmd bool) 
 	if c.specialCmd(p, pushCmd) {
 		return nil
 	}
-	gvr, v, err := c.viewMetaFor(p)
+	gvr, v, comd, err := c.viewMetaFor(p)
 	if err != nil {
 		return err
+	}
+	if comd != nil {
+		p.Merge(comd)
 	}
 
 	if context, ok := p.HasContext(); ok {
@@ -194,21 +202,28 @@ func (c *Command) run(p *cmd.Interpreter, fqn string, clearStack, pushCmd bool) 
 	if cns, ok := p.NSArg(); ok {
 		ns = cns
 	}
-	if err := c.app.switchNS(ns); err != nil {
-		return err
+	if ok, err := dao.MetaAccess.IsNamespaced(gvr); ok && err == nil {
+		if err := c.app.switchNS(ns); err != nil {
+			return err
+		}
+		p.SwitchNS(ns)
+	} else {
+		p.ClearNS()
 	}
 
 	co := c.componentFor(gvr, fqn, v)
-	co.SetFilter("")
-	co.SetLabelSelector(labels.Everything())
+	co.SetFilter("", true)
+	co.SetLabelSelector(labels.Everything(), true)
 	if f, ok := p.FilterArg(); ok {
-		co.SetFilter(f)
+		co.SetFilter(f, true)
 	}
 	if f, ok := p.FuzzyArg(); ok {
-		co.SetFilter("-f " + f)
+		co.SetFilter("-f "+f, true)
 	}
-	if ss, ok := p.LabelsArg(); ok {
-		co.SetLabelSelector(labels.SelectorFromSet(ss))
+	if sel, err := p.LabelsSelector(); err == nil {
+		co.SetLabelSelector(sel, false)
+	} else {
+		slog.Error("Unable to grok labels selector", slogs.Error, err)
 	}
 
 	return c.exec(p, gvr, co, clearStack, pushCmd)
@@ -225,7 +240,7 @@ func (c *Command) defaultCmd(isRoot bool) error {
 	}
 	p := cmd.NewInterpreter(c.app.Config.ActiveView())
 	if p.IsBlank() {
-		return c.run(p.Reset(defCmd), "", true, true)
+		return c.run(p.Reset(defCmd, ""), "", true, true)
 	}
 
 	if err := c.run(p, "", true, true); err != nil {
@@ -233,7 +248,7 @@ func (c *Command) defaultCmd(isRoot bool) error {
 			slogs.Command, p.GetLine(),
 			slogs.Error, err,
 		)
-		p = p.Reset(defCmd)
+		p = p.Reset(defCmd, "")
 		return c.run(p, "", true, true)
 	}
 
@@ -285,13 +300,10 @@ func (c *Command) specialCmd(p *cmd.Interpreter, pushCmd bool) bool {
 	return true
 }
 
-func (c *Command) viewMetaFor(p *cmd.Interpreter) (*client.GVR, *MetaViewer, error) {
-	gvr, exp, ok := c.alias.AsGVR(p.Cmd())
+func (c *Command) viewMetaFor(p *cmd.Interpreter) (*client.GVR, *MetaViewer, *cmd.Interpreter, error) {
+	gvr, ok := c.alias.Resolve(p)
 	if !ok {
-		return client.NoGVR, nil, fmt.Errorf("`%s` command not found", p.Cmd())
-	}
-	if exp != "" {
-		p.Amend(cmd.NewInterpreter(gvr.String() + " " + exp))
+		return client.NoGVR, nil, nil, fmt.Errorf("`%s` command not found", p.Cmd())
 	}
 
 	v := MetaViewer{
@@ -303,7 +315,7 @@ func (c *Command) viewMetaFor(p *cmd.Interpreter) (*client.GVR, *MetaViewer, err
 		v = mv
 	}
 
-	return gvr, &v, nil
+	return gvr, &v, p, nil
 }
 
 func (*Command) componentFor(gvr *client.GVR, fqn string, v *MetaViewer) ResourceViewer {
@@ -333,7 +345,7 @@ func (c *Command) exec(p *cmd.Interpreter, gvr *client.GVR, comp model.Component
 			ci := cmd.NewInterpreter(podCmd)
 			currentCommand, ok := c.app.cmdHistory.Top()
 			if ok {
-				ci = ci.Reset(currentCommand)
+				ci = ci.Reset(currentCommand, "")
 			}
 			err = c.run(ci, "", true, true)
 		}
@@ -354,7 +366,7 @@ func (c *Command) exec(p *cmd.Interpreter, gvr *client.GVR, comp model.Component
 	if pushCmd {
 		c.app.cmdHistory.Push(p.GetLine())
 	}
-	slog.Debug("History", slogs.Stack, c.app.cmdHistory.List())
+	slog.Debug("History", slogs.Stack, strings.Join(c.app.cmdHistory.List(), "|"))
 
 	return
 }

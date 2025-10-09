@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
@@ -60,7 +59,7 @@ func (t *Table) Init(ctx context.Context) (err error) {
 	}
 	t.SetInputCapture(t.keyboard)
 	t.bindKeys()
-	t.GetModel().SetRefreshRate(time.Duration(t.app.Config.K9s.GetRefreshRate()) * time.Second)
+	t.GetModel().SetRefreshRate(t.app.Config.K9s.RefreshDuration())
 	t.CmdBuff().AddListener(t)
 
 	return nil
@@ -150,7 +149,12 @@ func (t *Table) Start() {
 	t.Styles().AddListener(t.Table)
 	cmds := []string{t.Table.GVR().String()}
 	if t.command != nil {
-		cmds = append(cmds, t.command.GetLine())
+		if t.command.GetLine() != t.Table.GVR().String() {
+			cmds = append(cmds, t.command.GetLine())
+		}
+		for _, a := range t.command.Aliases() {
+			cmds = append(cmds, a)
+		}
 	}
 	t.App().CustomView().AddListeners(t.Table, cmds...)
 }

@@ -4,36 +4,59 @@
 package cmd
 
 import (
+	"log/slog"
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/slogs"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 // Interpreter tracks user prompt input.
 type Interpreter struct {
-	line string
-	cmd  string
-	args args
+	line    string
+	cmd     string
+	aliases []string
+	args    args
 }
 
 // NewInterpreter returns a new instance.
-func NewInterpreter(s string) *Interpreter {
+func NewInterpreter(s string, aliases ...string) *Interpreter {
 	c := Interpreter{
-		line: s,
-		args: make(args),
+		line:    s,
+		args:    make(args),
+		aliases: aliases,
 	}
 	c.grok()
 
 	return &c
 }
 
-func (c *Interpreter) TrimNS() string {
-	if !c.HasNS() {
-		return c.line
-	}
-	ns, _ := c.NSArg()
+// ClearNS clears the current namespace if any.
+func (c *Interpreter) ClearNS() {
+	c.SwitchNS(client.BlankNamespace)
+}
 
-	return strings.TrimSpace(strings.Replace(c.line, ns, "", 1))
+// SwitchNS replaces the current namespace with the provided one.
+func (c *Interpreter) SwitchNS(ns string) {
+	if ons, ok := c.NSArg(); ok && ons != client.BlankNamespace {
+		c.Reset(strings.TrimSpace(strings.Replace(c.line, " "+ons, " "+ns, 1)), "")
+		return
+	}
+	if ns != client.BlankNamespace {
+		c.Reset(strings.TrimSpace(c.line)+" "+ns, "")
+	}
+}
+
+func (c *Interpreter) Merge(p *Interpreter) {
+	if p == nil {
+		return
+	}
+	c.cmd = p.cmd
+	for k, v := range p.args {
+		c.args[k] = v
+	}
+	c.line = c.cmd + " " + c.args.String()
 }
 
 func (c *Interpreter) grok() {
@@ -42,7 +65,40 @@ func (c *Interpreter) grok() {
 		return
 	}
 	c.cmd = strings.ToLower(ff[0])
-	c.args = newArgs(c, ff[1:])
+
+	var lbls string
+	line := strings.TrimSpace(strings.Replace(c.line, c.cmd, "", 1))
+	if strings.Contains(line, "'") {
+		start, end, ok := quoteIndicies(line)
+		if ok {
+			lbls = line[start+1 : end]
+			line = strings.TrimSpace(strings.Replace(line, "'"+lbls+"'", "", 1))
+		} else {
+			slog.Error("Unmatched single quote in command line", slogs.Line, c.line)
+			line = ""
+		}
+	}
+	ff = strings.Fields(line)
+	if lbls != "" {
+		ff = append(ff, lbls)
+	}
+	c.args = newArgs(c, ff)
+}
+
+func quoteIndicies(s string) (start, end int, ok bool) {
+	start, end = -1, -1
+	for i, r := range s {
+		if r == '\'' {
+			if start == -1 {
+				start = i
+			} else if end == -1 {
+				end = i
+				break
+			}
+		}
+	}
+	ok = start != -1 && end != -1
+	return
 }
 
 // HasNS returns true if ns is present in prompt.
@@ -55,6 +111,10 @@ func (c *Interpreter) HasNS() bool {
 // Cmd returns the command.
 func (c *Interpreter) Cmd() string {
 	return c.cmd
+}
+
+func (c *Interpreter) Aliases() []string {
+	return c.aliases
 }
 
 func (c *Interpreter) Args() string {
@@ -80,11 +140,24 @@ func (c *Interpreter) Amend(c1 *Interpreter) {
 }
 
 // Reset resets with new command.
-func (c *Interpreter) Reset(s string) *Interpreter {
-	c.line = s
+func (c *Interpreter) Reset(line, alias string) *Interpreter {
+	c.line = line
 	c.grok()
 
+	if alias != "" && alias != c.cmd {
+		c.addAlias(alias)
+	}
+
 	return c
+}
+
+func (c *Interpreter) addAlias(a string) {
+	for _, v := range c.aliases {
+		if v == a {
+			return
+		}
+	}
+	c.aliases = append(c.aliases, a)
 }
 
 // GetLine returns the prompt.
@@ -185,7 +258,7 @@ func (c *Interpreter) RBACArgs() (subject, verb string, ok bool) {
 	return
 }
 
-// XRayArgs return the gvr and ns if any.
+// XrayArgs return the gvr and ns if any.
 func (c *Interpreter) XrayArgs() (cmd, namespace string, ok bool) {
 	if !c.IsXrayCmd() {
 		return
@@ -237,8 +310,6 @@ func (c *Interpreter) HasContext() (string, bool) {
 }
 
 // LabelsArg return the labels map if any.
-func (c *Interpreter) LabelsArg() (map[string]string, bool) {
-	ll, ok := c.args[labelKey]
-
-	return ToLabels(ll), ok
+func (c *Interpreter) LabelsSelector() (labels.Selector, error) {
+	return labels.Parse(c.args[labelKey])
 }
