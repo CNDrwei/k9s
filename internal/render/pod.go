@@ -140,7 +140,7 @@ func (p *Pod) Render(o any, _ string, row *model1.Row) error {
 	if p.specs.isEmpty() {
 		return nil
 	}
-	cols, err := p.specs.realize(pwm.Raw, defaultPodHeader, row)
+	cols, err := p.specs.realize(pwm.Raw.DeepCopy(), defaultPodHeader, row)
 	if err != nil {
 		return err
 	}
@@ -426,8 +426,16 @@ func (*Pod) ContainerStats(cc []v1.ContainerStatus) (readyCnt, terminatedCnt, re
 }
 
 func (*Pod) initContainerStats(cc []v1.Container, cos []v1.ContainerStatus) (ready, total, restart int) {
+	containerByName := make(map[string]*v1.Container, len(cc))
+	for i := range cc {
+		containerByName[cc[i].Name] = &cc[i]
+	}
 	for i := range cos {
-		if !isSideCarContainer(cc[i].RestartPolicy) {
+		c, ok := containerByName[cos[i].Name]
+		if !ok {
+			continue
+		}
+		if !isSideCarContainer(c.RestartPolicy) {
 			continue
 		}
 		total++
